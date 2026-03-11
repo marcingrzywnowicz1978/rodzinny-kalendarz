@@ -44,7 +44,6 @@ function parseDate(s) {
   const [y,m,d] = s.split("-").map(Number); return new Date(y, m-1, d);
 }
 function eventColor(ev) {
-  if (ev.type === "trip") return "#4A90D9";
   if (ev.type === "birthday") return "#E8475F";
   return ev.color || "#888";
 }
@@ -618,10 +617,11 @@ function RecurrencePanel({ recurrence, onChange, inp, lbl }) {
   );
 }
 
-function AddEventPage({ onAdd, onCancel, currentUser }) {
+function AddEventPage({ onAdd, onAddMulti, onCancel, currentUser }) {
   const [type, setType] = useState("event");
   const [title, setTitle] = useState("");
   const [calendarOwner, setCalendarOwner] = useState(currentUser?.email || FAMILY[0].id);
+  const [calendarOwners, setCalendarOwners] = useState([currentUser?.email || FAMILY[0].id]);
   const [date, setDate] = useState(formatDate(new Date()));
   const [dateFrom, setDateFrom] = useState(formatDate(new Date()));
   const [dateTo, setDateTo] = useState(formatDate(new Date()));
@@ -630,14 +630,25 @@ function AddEventPage({ onAdd, onCancel, currentUser }) {
   const [error, setError] = useState("");
   const [recurrence, setRecurrence] = useState({ freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
 
+  function toggleOwner(id) {
+    setCalendarOwners(prev => prev.includes(id) ? (prev.length > 1 ? prev.filter(x => x !== id) : prev) : [...prev, id]);
+  }
+
   function handleSubmit() {
     if (!title.trim()) { setError("Wpisz tytuł wydarzenia."); return; }
     setError("");
-    const person = FAMILY.find(f => f.id === calendarOwner);
-    const base = { title: title.trim(), type, personEmail: calendarOwner, color: person?.color };
-    if (type === "event") onAdd({ ...base, date: parseDate(date), start, end, allDay: false, recurrence });
-    else if (type === "birthday") onAdd({ ...base, date: parseDate(date), allDay: true });
-    else onAdd({ ...base, dateFrom: parseDate(dateFrom), dateTo: parseDate(dateTo), allDay: true });
+    if (type === "trip") {
+      const events = calendarOwners.map(ownerId => {
+        const person = FAMILY.find(f => f.id === ownerId);
+        return { title: title.trim(), type, personEmail: ownerId, color: person?.color, dateFrom: parseDate(dateFrom), dateTo: parseDate(dateTo), date: parseDate(dateFrom), allDay: true };
+      });
+      onAddMulti(events);
+    } else {
+      const person = FAMILY.find(f => f.id === calendarOwner);
+      const base = { title: title.trim(), type, personEmail: calendarOwner, color: person?.color };
+      if (type === "event") onAdd({ ...base, date: parseDate(date), start, end, allDay: false, recurrence });
+      else onAdd({ ...base, date: parseDate(date), allDay: true });
+    }
   }
 
   const inp = { width: "100%", padding: "12px 14px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#1a1a2e", backgroundColor: "#fafafa", boxSizing: "border-box", outline: "none" };
@@ -668,12 +679,16 @@ function AddEventPage({ onAdd, onCancel, currentUser }) {
       <div style={{ marginBottom: 14 }}>
         <label style={lbl}>Dla kogo</label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {FAMILY.map(p => (
-            <button key={p.id} onClick={() => setCalendarOwner(p.id)} style={{ padding: "8px 16px", borderRadius: 20, border: "2px solid", borderColor: calendarOwner === p.id ? p.color : "#eee", backgroundColor: calendarOwner === p.id ? p.color : "#fafafa", color: calendarOwner === p.id ? (p.textDark ? "#7a2a4a" : "white") : "#aaa", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
-              {p.name}
-            </button>
-          ))}
+          {FAMILY.map(p => {
+            const active = type === "trip" ? calendarOwners.includes(p.id) : calendarOwner === p.id;
+            return (
+              <button key={p.id} onClick={() => type === "trip" ? toggleOwner(p.id) : setCalendarOwner(p.id)} style={{ padding: "8px 16px", borderRadius: 20, border: "2px solid", borderColor: active ? p.color : "#eee", backgroundColor: active ? p.color : "#fafafa", color: active ? (p.textDark ? "#7a2a4a" : "white") : "#aaa", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
+                {p.name}
+              </button>
+            );
+          })}
         </div>
+        {type === "trip" && <div style={{ fontSize: 11, color: "#aaa", marginTop: 6 }}>Możesz zaznaczyć kilka osób.</div>}
       </div>
 
       {type === "trip" ? (
@@ -787,11 +802,23 @@ export default function App() {
 
   useEffect(() => { if (token) loadEvents(token); }, [token, loadEvents]);
 
-  async function handleAddEvent(eventData) {
+  async function handleAddEvent(eventData, navigateAfter = true) {
     if (!token) return;
     const person = FAMILY.find(f => f.id === eventData.personEmail);
     if (!person) return;
     await createCalendarEvent(token, person.id, eventData);
+    if (navigateAfter !== false) {
+      await loadEvents(token);
+      setPage("calendar");
+    }
+  }
+
+  async function handleAddEventMulti(events) {
+    if (!token) return;
+    for (const eventData of events) {
+      const person = FAMILY.find(f => f.id === eventData.personEmail);
+      if (person) await createCalendarEvent(token, person.id, eventData);
+    }
     await loadEvents(token);
     setPage("calendar");
   }
@@ -872,7 +899,7 @@ export default function App() {
       {page === "add" ? (
         <div style={{ padding: "20px 16px" }}>
           <div style={{ backgroundColor: "#fff", borderRadius: 16, padding: 20, boxShadow: "0 2px 20px rgba(0,0,0,0.06)" }}>
-            <AddEventPage onAdd={handleAddEvent} onCancel={() => setPage("calendar")} currentUser={currentUser} />
+            <AddEventPage onAdd={handleAddEvent} onAddMulti={handleAddEventMulti} onCancel={() => setPage("calendar")} currentUser={currentUser} />
           </div>
         </div>
       ) : (
@@ -903,7 +930,6 @@ export default function App() {
             <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap", padding: "0 2px" }}>
               {FAMILY.map(p => <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: p.color }} /><span style={{ fontSize: 11, color: "#999", fontWeight: 500 }}>{p.name}</span></div>)}
               <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: "#E8475F" }} /><span style={{ fontSize: 11, color: "#999", fontWeight: 500 }}>Urodziny</span></div>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: "#4A90D9" }} /><span style={{ fontSize: 11, color: "#999", fontWeight: 500 }}>Wyjazd</span></div>
             </div>
           </div>
         </>
