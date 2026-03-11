@@ -347,21 +347,24 @@ function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
         ))}
         {(() => {
           // Oblicz kolumny dla nakładających się wydarzeń
+          const assigned = timedEvs.map(ev => ({ ev, col: -1 }));
           const cols = [];
-          timedEvs.forEach(ev => {
-            const s = timeToMinutes(ev.start);
-            const e = timeToMinutes(ev.end || ev.start) + (ev.end ? 0 : 60);
+          assigned.forEach(item => {
+            const s = timeToMinutes(item.ev.start);
+            const e = timeToMinutes(item.ev.end || item.ev.start) + (item.ev.end ? 0 : 60);
             let placed = false;
             for (let ci = 0; ci < cols.length; ci++) {
-              const last = cols[ci][cols[ci].length - 1];
-              const ls = timeToMinutes(last.start);
-              const le = timeToMinutes(last.end || last.start) + (last.end ? 0 : 60);
-              if (s >= le) { cols[ci].push(ev); placed = true; break; }
+              const overlaps = cols[ci].some(other => {
+                const os = timeToMinutes(other.start);
+                const oe = timeToMinutes(other.end || other.start) + (other.end ? 0 : 60);
+                return s < oe && e > os;
+              });
+              if (!overlaps) { cols[ci].push(item.ev); item.col = ci; placed = true; break; }
             }
-            if (!placed) cols.push([ev]);
+            if (!placed) { item.col = cols.length; cols.push([item.ev]); }
           });
-          const totalCols = cols.length;
-          return cols.flatMap((col, ci) => col.map(ev => {
+          const totalCols = cols.length || 1;
+          return assigned.map(({ ev, col }) => {
             const color = eventColor(ev);
             const dark = isTextDark(ev);
             const startMin = timeToMinutes(ev.start) - START_HOUR * 60;
@@ -370,7 +373,7 @@ function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
             const height = Math.max(((endMin - startMin) / 60) * SLOT_HEIGHT, 36);
             const person = FAMILY.find(f => f.id === ev.personEmail);
             const colWidth = `calc((100% - 52px) / ${totalCols})`;
-            const colLeft = `calc(52px + ${ci} * (100% - 52px) / ${totalCols})`;
+            const colLeft = `calc(52px + ${col} * (100% - 52px) / ${totalCols})`;
             return (
               <div key={ev.id}
                 draggable
@@ -386,7 +389,7 @@ function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
                 </div>
               </div>
             );
-          }));
+          });
         })()}
       </div>
     </div>
