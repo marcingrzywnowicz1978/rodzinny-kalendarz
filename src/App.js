@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+allDay ? "#1a1a2e" : "#ddd"import { useState, useEffect, useCallback, useRef } from "react";
 
 const CLIENT_ID = "346630044108-7alqhklonsgivjnvfmn5mho6mtc3csrv.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/calendar";
