@@ -162,8 +162,8 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
   const [date, setDate] = useState(formatDate(ev.date));
   const [start, setStart] = useState(ev.start || "09:00");
   const [end, setEnd] = useState(ev.end || "10:00");
-  const [personEmail, setPersonEmail] = useState(ev.personEmail);
   const [recurrence, setRecurrence] = useState({ freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
+  const [personEmail, setPersonEmail] = useState(ev.personEmail);
   const [saving, setSaving] = useState(false);
   const [step, setStep] = useState("edit");
   const isRecurring = !!ev.recurringEventId;
@@ -724,7 +724,6 @@ export default function App() {
     if (!token) return;
     const newPerson = FAMILY.find(f => f.id === eventData.personEmail);
     if (!newPerson) return;
-    // Jeśli zmieniono właściciela — usuń stare, utwórz nowe
     if (eventData.originalPersonEmail && eventData.originalPersonEmail !== eventData.personEmail) {
       const oldPerson = FAMILY.find(f => f.id === eventData.originalPersonEmail);
       if (oldPerson) await deleteCalendarEvent(token, oldPerson.id, eventData.id, eventData.recurringEventId, scope);
