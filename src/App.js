@@ -90,10 +90,15 @@ function buildRRule(recurrence) {
 }
 
 async function createCalendarEvent(token, calendarId, eventData) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const body = {
     summary: eventData.title,
-    start: eventData.allDay ? { date: formatDate(eventData.date) } : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.start}:00`).toISOString() },
-    end: eventData.allDay ? { date: formatDate(eventData.date) } : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.end}:00`).toISOString() },
+    start: eventData.allDay
+      ? { date: formatDate(eventData.date) }
+      : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.start}:00`).toISOString(), timeZone: tz },
+    end: eventData.allDay
+      ? { date: formatDate(eventData.date) }
+      : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.end}:00`).toISOString(), timeZone: tz },
   };
   if (eventData.type === "birthday") body.recurrence = ["RRULE:FREQ=YEARLY"];
   if (eventData.type === "trip") {
