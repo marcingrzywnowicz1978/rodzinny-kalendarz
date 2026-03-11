@@ -299,51 +299,26 @@ function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
     dragRef.current = null;
   }
 
-  // Touch drag — długie przytrzymanie aktywuje drag, krótki dotyk = scroll lub kliknięcie
+  // Touch drag
   const touchDragRef = useRef(null);
-  const longPressTimer = useRef(null);
-  const [draggingEv, setDraggingEv] = useState(null);
-
   function handleTouchStart(e, ev) {
-    const startY = e.touches[0].clientY;
-    touchDragRef.current = { ev, startY, origStart: timeToMinutes(ev.start), origEnd: timeToMinutes(ev.end || ev.start), isDrag: false };
-    // Po 400ms przytrzymania aktywuj tryb drag
-    longPressTimer.current = setTimeout(() => {
-      if (touchDragRef.current) {
-        touchDragRef.current.isDrag = true;
-        setDraggingEv(ev.id);
-      }
-    }, 400);
+    touchDragRef.current = { ev, startY: e.touches[0].clientY, origStart: timeToMinutes(ev.start), origEnd: timeToMinutes(ev.end || ev.start) };
   }
-
-  function handleTouchMove(e) {
-    if (!touchDragRef.current) return;
-    const deltaY = Math.abs(e.touches[0].clientY - touchDragRef.current.startY);
-    // Jeśli użytkownik zaczął scrollować (>8px) przed aktywacją draga — anuluj
-    if (!touchDragRef.current.isDrag && deltaY > 8) {
-      clearTimeout(longPressTimer.current);
-      touchDragRef.current = null;
-      setDraggingEv(null);
-    }
-  }
-
   async function handleTouchEnd(e) {
-    clearTimeout(longPressTimer.current);
     if (!touchDragRef.current || !gridRef.current) return;
-    const { ev, startY, origStart, origEnd, isDrag } = touchDragRef.current;
+    const { ev, startY, origStart, origEnd } = touchDragRef.current;
     const endY = e.changedTouches[0].clientY;
     const deltaY = endY - startY;
-    touchDragRef.current = null;
-    setDraggingEv(null);
-    if (!isDrag || Math.abs(deltaY) < 10) { onEdit(ev); return; }
+    if (Math.abs(deltaY) < 10) { onEdit(ev); touchDragRef.current = null; return; }
     const deltaMin = Math.round((deltaY / SLOT_HEIGHT) * 60 / 15) * 15;
     const newStartMin = origStart + deltaMin;
     const newEndMin = origEnd + deltaMin;
-    if (newStartMin < START_HOUR * 60 || newEndMin > 22 * 60) return;
+    if (newStartMin < START_HOUR * 60 || newEndMin > 22 * 60) { touchDragRef.current = null; return; }
     const person = FAMILY.find(f => f.id === ev.personEmail);
     if (!person || !token) return;
     await updateCalendarEvent(token, person.id, ev.id, { ...ev, start: minutesToTime(newStartMin), end: minutesToTime(newEndMin) });
     await loadEvents(token);
+    touchDragRef.current = null;
   }
 
   return (
@@ -396,10 +371,9 @@ function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
                 draggable
                 onDragStart={e => handleDragStart(e, ev)}
                 onTouchStart={e => handleTouchStart(e, ev)}
-                onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
                 onClick={() => onEdit(ev)}
-                style={{ position: "absolute", top, left: colLeft, width: colWidth, height, backgroundColor: color, borderRadius: 10, padding: "5px 8px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: draggingEv === ev.id ? `0 8px 24px ${color}99` : `0 2px 8px ${color}55`, cursor: "grab", touchAction: "auto", WebkitTapHighlightColor: "transparent", border: "2px solid rgba(255,255,255,0.35)", opacity: draggingEv === ev.id ? 0.85 : 1, transform: draggingEv === ev.id ? "scale(1.02)" : "none", transition: "box-shadow 0.2s, opacity 0.2s" }}
+                style={{ position: "absolute", top, left: colLeft, width: colWidth, height, backgroundColor: color, borderRadius: 10, padding: "5px 8px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: `0 2px 8px ${color}55`, cursor: "grab", touchAction: "none", WebkitTapHighlightColor: "transparent", border: "2px solid rgba(255,255,255,0.35)" }}
               >
                 <div style={{ color: dark ? "#7a2a4a" : "white", fontWeight: 700, fontSize: 13, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</div>
                 <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
