@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const CLIENT_ID = "346630044108-7alqhklonsgivjnvfmn5mho6mtc3csrv.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/calendar";
@@ -11,6 +11,8 @@ const FAMILY = [
 ];
 
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 6);
+const SLOT_HEIGHT = 64;
+const START_HOUR = 6;
 
 function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -32,6 +34,9 @@ function getWeekDays(date) {
 function timeToMinutes(t) {
   const [h, m] = t.split(":").map(Number); return h * 60 + m;
 }
+function minutesToTime(m) {
+  return `${String(Math.floor(m / 60)).padStart(2,"0")}:${String(m % 60).padStart(2,"0")}`;
+}
 function formatDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
@@ -43,6 +48,9 @@ function eventColor(ev) {
   if (ev.type === "birthday") return "#E8475F";
   return ev.color || "#888";
 }
+function isTextDark(ev) {
+  return ev.color === "#F4A7C3" && ev.type === "event";
+}
 function eventsForDay(events, day, activePersons) {
   return events.filter(ev => {
     const personMatch = !ev.personEmail || activePersons.includes(ev.personEmail);
@@ -52,25 +60,21 @@ function eventsForDay(events, day, activePersons) {
   });
 }
 
+// ---- GOOGLE API ----
 function loadGoogleScript() {
   return new Promise((resolve) => {
     if (document.getElementById("google-gsi")) { resolve(); return; }
-    const script = document.createElement("script");
-    script.id = "google-gsi";
-    script.src = "https://accounts.google.com/gsi/client";
-    script.onload = resolve;
-    document.body.appendChild(script);
+    const s = document.createElement("script");
+    s.id = "google-gsi"; s.src = "https://accounts.google.com/gsi/client";
+    s.onload = resolve; document.body.appendChild(s);
   });
 }
-
 async function fetchCalendarEvents(token, calendarId, timeMin, timeMax) {
   const params = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), singleEvents: true, orderBy: "startTime", maxResults: 250 });
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) return [];
-  const data = await res.json();
-  return data.items || [];
+  return (await res.json()).items || [];
 }
-
 async function createCalendarEvent(token, calendarId, eventData) {
   const body = {
     summary: eventData.title,
@@ -79,71 +83,207 @@ async function createCalendarEvent(token, calendarId, eventData) {
   };
   if (eventData.type === "birthday") body.recurrence = ["RRULE:FREQ=YEARLY"];
   if (eventData.type === "trip") {
-    const nextDay = new Date(eventData.dateTo);
-    nextDay.setDate(nextDay.getDate() + 1);
+    const nd = new Date(eventData.dateTo); nd.setDate(nd.getDate() + 1);
     body.start = { date: formatDate(eventData.dateFrom) };
-    body.end = { date: formatDate(nextDay) };
+    body.end = { date: formatDate(nd) };
   }
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return res.ok;
 }
-
+async function updateCalendarEvent(token, calendarId, eventId, eventData) {
+  const body = {
+    summary: eventData.title,
+    start: eventData.allDay ? { date: formatDate(eventData.date) } : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.start}:00`).toISOString() },
+    end: eventData.allDay ? { date: formatDate(eventData.date) } : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.end}:00`).toISOString() },
+  };
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return res.ok;
+}
+async function deleteCalendarEvent(token, calendarId, eventId) {
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+  return res.ok || res.status === 204;
+}
 function parseGoogleEvents(items, personEmail, personColor) {
   return items.map(item => {
     const isAllDay = !!item.start.date;
     const date = isAllDay ? new Date(item.start.date + "T00:00:00") : new Date(item.start.dateTime);
     const endDate = isAllDay ? new Date(item.end.date + "T00:00:00") : new Date(item.end?.dateTime || item.start.dateTime);
     const isMultiDay = !sameDay(date, endDate) && isAllDay;
-    return { id: item.id, type: isMultiDay ? "trip" : "event", title: item.summary || "(bez tytułu)", personEmail, color: personColor, date, dateFrom: date, dateTo: isMultiDay ? new Date(endDate.getTime() - 86400000) : date, start: isAllDay ? null : `${String(date.getHours()).padStart(2,"0")}:${String(date.getMinutes()).padStart(2,"0")}`, end: isAllDay ? null : `${String(endDate.getHours()).padStart(2,"0")}:${String(endDate.getMinutes()).padStart(2,"0")}`, allDay: isAllDay };
+    return {
+      id: item.id, type: isMultiDay ? "trip" : "event",
+      title: item.summary || "(bez tytułu)", personEmail, color: personColor,
+      date, dateFrom: date,
+      dateTo: isMultiDay ? new Date(endDate.getTime() - 86400000) : date,
+      start: isAllDay ? null : `${String(date.getHours()).padStart(2,"0")}:${String(date.getMinutes()).padStart(2,"0")}`,
+      end: isAllDay ? null : `${String(endDate.getHours()).padStart(2,"0")}:${String(endDate.getMinutes()).padStart(2,"0")}`,
+      allDay: isAllDay,
+    };
   });
 }
 
-function EventChip({ ev, small }) {
+// ---- EDIT MODAL ----
+function EditModal({ ev, onSave, onDelete, onClose }) {
+  const [title, setTitle] = useState(ev.title);
+  const [date, setDate] = useState(formatDate(ev.date));
+  const [start, setStart] = useState(ev.start || "09:00");
+  const [end, setEnd] = useState(ev.end || "10:00");
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#1a1a2e", backgroundColor: "#fafafa", boxSizing: "border-box", outline: "none" };
+  const lbl = { fontSize: 11, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 5 };
+  const person = FAMILY.find(f => f.id === ev.personEmail);
   const color = eventColor(ev);
-  const dark = ev.color === "#F4A7C3" && ev.type === "event";
+
+  async function handleSave() {
+    setSaving(true);
+    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end });
+    setSaving(false);
+  }
+
   return (
-    <div style={{ backgroundColor: color, borderRadius: small ? 6 : 8, padding: small ? "3px 6px" : "5px 10px", cursor: "pointer", boxShadow: `0 1px 4px ${color}44`, marginBottom: small ? 0 : 4 }}>
-      <div style={{ color: dark ? "#7a2a4a" : "white", fontSize: small ? 10 : 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.title}</div>
-      {!small && ev.start && <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.75)", fontSize: 10 }}>{ev.start}{ev.end ? `–${ev.end}` : ""}</div>}
+    <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ backgroundColor: "white", borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+          <div style={{ width: 14, height: 14, borderRadius: 4, backgroundColor: color, flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#888" }}>{person?.name}</span>
+          <div style={{ flex: 1 }} />
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "none", backgroundColor: "#f0f0f0", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", color: "#666" }}>×</button>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={lbl}>Tytuł</label>
+          <input style={inp} value={title} onChange={e => setTitle(e.target.value)} />
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={lbl}>Data</label>
+          <input type="date" style={inp} value={date} onChange={e => setDate(e.target.value)} />
+        </div>
+        {!ev.allDay && (
+          <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
+            <div style={{ flex: 1 }}><label style={lbl}>Początek</label><input type="time" style={inp} value={start} onChange={e => setStart(e.target.value)} /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Koniec</label><input type="time" style={inp} value={end} onChange={e => setEnd(e.target.value)} /></div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+          {!confirmDelete ? (
+            <button onClick={() => setConfirmDelete(true)} style={{ padding: "12px 16px", borderRadius: 12, border: "none", backgroundColor: "#fff0f0", color: "#cc3333", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14 }}>🗑 Usuń</button>
+          ) : (
+            <button onClick={() => onDelete(ev)} style={{ padding: "12px 16px", borderRadius: 12, border: "none", backgroundColor: "#cc3333", color: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14 }}>Na pewno usuń</button>
+          )}
+          <button onClick={handleSave} disabled={saving} style={{ flex: 1, padding: "12px", borderRadius: 12, border: "none", backgroundColor: "#1a1a2e", color: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>
+            {saving ? "Zapisuję..." : "Zapisz zmiany"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function DayView({ date, events, activePersons }) {
-  const SLOT_HEIGHT = 56, START_HOUR = 6;
+// ---- EVENT CHIP ----
+function EventChip({ ev, small, onEdit }) {
+  const color = eventColor(ev);
+  const dark = isTextDark(ev);
+  return (
+    <div onClick={() => onEdit && onEdit(ev)} style={{ backgroundColor: color, borderRadius: small ? 6 : 8, padding: small ? "4px 7px" : "6px 10px", cursor: "pointer", boxShadow: `0 1px 4px ${color}44`, marginBottom: small ? 0 : 4, WebkitTapHighlightColor: "transparent" }}>
+      <div style={{ color: dark ? "#7a2a4a" : "white", fontSize: small ? 11 : 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.title}</div>
+      {!small && ev.start && <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.75)", fontSize: 11 }}>{ev.start}{ev.end ? `–${ev.end}` : ""}</div>}
+    </div>
+  );
+}
+
+// ---- DAY VIEW with drag ----
+function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
   const dayEvs = eventsForDay(events, date, activePersons);
   const timedEvs = dayEvs.filter(e => e.start);
   const allDayEvs = dayEvs.filter(e => !e.start);
+  const gridRef = useRef(null);
+  const dragRef = useRef(null);
+
+  function handleDragStart(e, ev) {
+    dragRef.current = { ev, startY: e.clientY, origStart: timeToMinutes(ev.start), origEnd: timeToMinutes(ev.end || ev.start) };
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  async function handleDrop(e) {
+    e.preventDefault();
+    if (!dragRef.current || !gridRef.current) return;
+    const { ev, origStart, origEnd } = dragRef.current;
+    const rect = gridRef.current.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const newStartMin = Math.round((relY / SLOT_HEIGHT) * 60 / 15) * 15 + START_HOUR * 60;
+    const duration = origEnd - origStart;
+    const newEndMin = newStartMin + duration;
+    if (newStartMin < START_HOUR * 60 || newEndMin > 22 * 60) return;
+    const person = FAMILY.find(f => f.id === ev.personEmail);
+    if (!person || !token) return;
+    await updateCalendarEvent(token, person.id, ev.id, {
+      ...ev, start: minutesToTime(newStartMin), end: minutesToTime(newEndMin),
+    });
+    await loadEvents(token);
+    dragRef.current = null;
+  }
+
+  // Touch drag
+  const touchDragRef = useRef(null);
+  function handleTouchStart(e, ev) {
+    touchDragRef.current = { ev, startY: e.touches[0].clientY, origStart: timeToMinutes(ev.start), origEnd: timeToMinutes(ev.end || ev.start) };
+  }
+  async function handleTouchEnd(e) {
+    if (!touchDragRef.current || !gridRef.current) return;
+    const { ev, startY, origStart, origEnd } = touchDragRef.current;
+    const endY = e.changedTouches[0].clientY;
+    const deltaY = endY - startY;
+    if (Math.abs(deltaY) < 10) { onEdit(ev); touchDragRef.current = null; return; }
+    const deltaMin = Math.round((deltaY / SLOT_HEIGHT) * 60 / 15) * 15;
+    const newStartMin = origStart + deltaMin;
+    const newEndMin = origEnd + deltaMin;
+    if (newStartMin < START_HOUR * 60 || newEndMin > 22 * 60) { touchDragRef.current = null; return; }
+    const person = FAMILY.find(f => f.id === ev.personEmail);
+    if (!person || !token) return;
+    await updateCalendarEvent(token, person.id, ev.id, { ...ev, start: minutesToTime(newStartMin), end: minutesToTime(newEndMin) });
+    await loadEvents(token);
+    touchDragRef.current = null;
+  }
+
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 16 }}>
-        <span style={{ fontSize: 48, fontWeight: 800, color: "#1a1a2e", lineHeight: 1 }}>{date.getDate()}</span>
-        <span style={{ fontSize: 20, color: "#666", fontWeight: 500 }}>{getDayOfWeek(date)}, {getMonthName(date.getMonth())} {date.getFullYear()}</span>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 44, fontWeight: 800, color: "#1a1a2e", lineHeight: 1 }}>{date.getDate()}</span>
+        <span style={{ fontSize: 17, color: "#666", fontWeight: 500 }}>{getDayOfWeek(date)}, {getMonthName(date.getMonth())} {date.getFullYear()}</span>
       </div>
-      {allDayEvs.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>{allDayEvs.map(ev => <EventChip key={ev.id} ev={ev} />)}</div>}
-      {dayEvs.length === 0 && <div style={{ textAlign: "center", padding: "60px 0", color: "#aaa", fontSize: 16 }}>Brak wydarzeń 🎉</div>}
-      <div style={{ position: "relative" }}>
+      {allDayEvs.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{allDayEvs.map(ev => <EventChip key={ev.id} ev={ev} onEdit={onEdit} />)}</div>}
+      {dayEvs.length === 0 && <div style={{ textAlign: "center", padding: "48px 0", color: "#bbb", fontSize: 15 }}>Brak wydarzeń 🎉</div>}
+
+      <div style={{ position: "relative" }} ref={gridRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
         {HOURS.map(hour => (
           <div key={hour} style={{ display: "flex", alignItems: "flex-start" }}>
-            <div style={{ width: 48, minWidth: 48, color: "#bbb", fontSize: 12, fontWeight: 600, paddingTop: 4, textAlign: "right", paddingRight: 12, height: SLOT_HEIGHT }}>{hour}:00</div>
+            <div style={{ width: 44, minWidth: 44, color: "#bbb", fontSize: 11, fontWeight: 600, paddingTop: 4, textAlign: "right", paddingRight: 10, height: SLOT_HEIGHT }}>{hour}:00</div>
             <div style={{ flex: 1, borderTop: "1px solid #f0f0f0", height: SLOT_HEIGHT }} />
           </div>
         ))}
         {timedEvs.map(ev => {
           const color = eventColor(ev);
-          const dark = ev.color === "#F4A7C3" && ev.type === "event";
+          const dark = isTextDark(ev);
           const startMin = timeToMinutes(ev.start) - START_HOUR * 60;
           const endMin = timeToMinutes(ev.end || ev.start) - START_HOUR * 60 + (ev.end ? 0 : 60);
           const top = (startMin / 60) * SLOT_HEIGHT;
-          const height = Math.max(((endMin - startMin) / 60) * SLOT_HEIGHT, 32);
+          const height = Math.max(((endMin - startMin) / 60) * SLOT_HEIGHT, 36);
           const person = FAMILY.find(f => f.id === ev.personEmail);
           return (
-            <div key={ev.id} style={{ position: "absolute", top, left: 60, right: 0, height, backgroundColor: color, borderRadius: 10, padding: "6px 12px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: `0 2px 8px ${color}55`, cursor: "pointer", transition: "transform 0.1s" }}
-              onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.01)"; }}
-              onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; }}
+            <div key={ev.id}
+              draggable
+              onDragStart={e => handleDragStart(e, ev)}
+              onTouchStart={e => handleTouchStart(e, ev)}
+              onTouchEnd={handleTouchEnd}
+              onClick={() => onEdit(ev)}
+              style={{ position: "absolute", top, left: 52, right: 0, height, backgroundColor: color, borderRadius: 10, padding: "5px 10px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: `0 2px 8px ${color}55`, cursor: "grab", touchAction: "none", WebkitTapHighlightColor: "transparent" }}
             >
-              <div style={{ color: dark ? "#7a2a4a" : "white", fontWeight: 700, fontSize: 14, lineHeight: 1.2 }}>{ev.title}</div>
-              <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 2 }}>{person?.name || ""} · {ev.start}{ev.end ? `–${ev.end}` : ""}</div>
+              <div style={{ color: dark ? "#7a2a4a" : "white", fontWeight: 700, fontSize: 13, lineHeight: 1.2 }}>{ev.title}</div>
+              <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 1 }}>
+                {person?.name} · {ev.start}{ev.end ? `–${ev.end}` : ""}
+              </div>
             </div>
           );
         })}
@@ -152,23 +292,24 @@ function DayView({ date, events, activePersons }) {
   );
 }
 
-function WeekView({ date, events, activePersons }) {
+// ---- WEEK VIEW ----
+function WeekView({ date, events, activePersons, onEdit }) {
   const today = new Date();
   const days = getWeekDays(date);
   return (
-    <div style={{ display: "flex", gap: 8 }}>
+    <div style={{ display: "flex", gap: 4 }}>
       {days.map((day, i) => {
         const isToday = sameDay(day, today);
         const dayEvs = eventsForDay(events, day, activePersons);
         return (
           <div key={i} style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ textAlign: "center", marginBottom: 8, padding: "8px 4px", borderRadius: 10, backgroundColor: isToday ? "#1a1a2e" : "transparent" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: isToday ? "#fff" : "#999", textTransform: "uppercase", letterSpacing: 1 }}>{getDayOfWeek(day)}</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: isToday ? "#fff" : "#1a1a2e" }}>{day.getDate()}</div>
+            <div style={{ textAlign: "center", marginBottom: 6, padding: "6px 2px", borderRadius: 10, backgroundColor: isToday ? "#1a1a2e" : "transparent" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: isToday ? "#fff" : "#999", textTransform: "uppercase", letterSpacing: 0.5 }}>{getDayOfWeek(day)}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: isToday ? "#fff" : "#1a1a2e" }}>{day.getDate()}</div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {dayEvs.map(ev => <EventChip key={ev.id} ev={ev} small />)}
-              {dayEvs.length === 0 && <div style={{ height: 32 }} />}
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              {dayEvs.map(ev => <EventChip key={ev.id} ev={ev} small onEdit={onEdit} />)}
+              {dayEvs.length === 0 && <div style={{ height: 28 }} />}
             </div>
           </div>
         );
@@ -177,6 +318,7 @@ function WeekView({ date, events, activePersons }) {
   );
 }
 
+// ---- MONTH VIEW ----
 function MonthView({ date, events, activePersons, onDayClick }) {
   const today = new Date();
   const year = date.getFullYear(), month = date.getMonth();
@@ -187,24 +329,21 @@ function MonthView({ date, events, activePersons, onDayClick }) {
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 6 }}>
-        {["Pn","Wt","Śr","Cz","Pt","Sb","Nd"].map(d => <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: 1, padding: "4px 0" }}>{d}</div>)}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 4 }}>
+        {["Pn","Wt","Śr","Cz","Pt","Sb","Nd"].map(d => <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: "#bbb", textTransform: "uppercase", padding: "3px 0" }}>{d}</div>)}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
         {weeks.map((week, wi) => (
-          <div key={wi} style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+          <div key={wi} style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
             {week.map((day, di) => {
               if (!day) return <div key={di} />;
               const isToday = sameDay(day, today);
               const dayEvs = eventsForDay(events, day, activePersons);
               return (
-                <div key={di} onClick={() => onDayClick(day)} style={{ minHeight: 64, borderRadius: 10, padding: "6px 6px 4px", backgroundColor: isToday ? "#1a1a2e" : "#f9f9f9", border: isToday ? "none" : "1px solid #eee", cursor: "pointer", transition: "background 0.15s" }}
-                  onMouseEnter={e => { if (!isToday) e.currentTarget.style.backgroundColor = "#f0f0f0"; }}
-                  onMouseLeave={e => { if (!isToday) e.currentTarget.style.backgroundColor = "#f9f9f9"; }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 700, color: isToday ? "#fff" : "#333", marginBottom: 4 }}>{day.getDate()}</div>
+                <div key={di} onClick={() => onDayClick(day)} style={{ minHeight: 56, borderRadius: 8, padding: "4px 4px 3px", backgroundColor: isToday ? "#1a1a2e" : "#f9f9f9", border: isToday ? "none" : "1px solid #eee", cursor: "pointer" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: isToday ? "#fff" : "#333", marginBottom: 3 }}>{day.getDate()}</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                    {dayEvs.slice(0, 3).map(ev => <div key={ev.id} style={{ width: "100%", height: 5, borderRadius: 3, backgroundColor: eventColor(ev) }} />)}
+                    {dayEvs.slice(0, 3).map(ev => <div key={ev.id} style={{ width: "100%", height: 4, borderRadius: 2, backgroundColor: eventColor(ev) }} />)}
                     {dayEvs.length > 3 && <div style={{ fontSize: 9, color: "#aaa", fontWeight: 600 }}>+{dayEvs.length - 3}</div>}
                   </div>
                 </div>
@@ -217,6 +356,7 @@ function MonthView({ date, events, activePersons, onDayClick }) {
   );
 }
 
+// ---- ADD EVENT ----
 const EVENT_TYPES = [
   { id: "event", label: "Spotkanie", icon: "📅", desc: "Z godziną" },
   { id: "birthday", label: "Urodziny", icon: "🎂", desc: "Co roku" },
@@ -244,82 +384,92 @@ function AddEventPage({ onAdd, onCancel, currentUser }) {
     else onAdd({ ...base, dateFrom: parseDate(dateFrom), dateTo: parseDate(dateTo), allDay: true });
   }
 
-  const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#1a1a2e", backgroundColor: "#fafafa", boxSizing: "border-box", outline: "none" };
-  const lbl = { fontSize: 12, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 6 };
+  const inp = { width: "100%", padding: "12px 14px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#1a1a2e", backgroundColor: "#fafafa", boxSizing: "border-box", outline: "none" };
+  const lbl = { fontSize: 11, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 5 };
 
   return (
-    <div style={{ maxWidth: 520, margin: "0 auto" }}>
-      <h2 style={{ fontSize: 22, fontWeight: 800, color: "#1a1a2e", marginBottom: 4, marginTop: 0 }}>Dodaj wydarzenie</h2>
-      <p style={{ color: "#888", fontSize: 14, marginBottom: 24, marginTop: 0 }}>Wydarzenie zostanie zapisane w Google Calendar wybranej osoby.</p>
-      <div style={{ marginBottom: 20 }}>
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1a1a2e", marginBottom: 4, marginTop: 0 }}>Dodaj wydarzenie</h2>
+      <p style={{ color: "#888", fontSize: 13, marginBottom: 20, marginTop: 0 }}>Zapisze się w Google Calendar wybranej osoby.</p>
+
+      <div style={{ marginBottom: 18 }}>
         <label style={lbl}>Typ</label>
         <div style={{ display: "flex", gap: 8 }}>
           {EVENT_TYPES.map(t => (
-            <button key={t.id} onClick={() => setType(t.id)} style={{ flex: 1, padding: "12px 6px", borderRadius: 12, border: "2px solid", borderColor: type === t.id ? "#1a1a2e" : "#eee", backgroundColor: type === t.id ? "#1a1a2e" : "#fafafa", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", transition: "all 0.15s" }}>
-              <div style={{ fontSize: 22, marginBottom: 4 }}>{t.icon}</div>
+            <button key={t.id} onClick={() => setType(t.id)} style={{ flex: 1, padding: "10px 4px", borderRadius: 12, border: "2px solid", borderColor: type === t.id ? "#1a1a2e" : "#eee", backgroundColor: type === t.id ? "#1a1a2e" : "#fafafa", cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}>
+              <div style={{ fontSize: 20, marginBottom: 3 }}>{t.icon}</div>
               <div style={{ fontSize: 11, fontWeight: 700, color: type === t.id ? "#fff" : "#444" }}>{t.label}</div>
-              <div style={{ fontSize: 10, color: type === t.id ? "rgba(255,255,255,0.55)" : "#bbb", marginTop: 2 }}>{t.desc}</div>
             </button>
           ))}
         </div>
       </div>
-      <div style={{ marginBottom: 16 }}>
+
+      <div style={{ marginBottom: 14 }}>
         <label style={lbl}>Tytuł</label>
         <input style={inp} value={title} onChange={e => setTitle(e.target.value)} placeholder={type === "birthday" ? "np. Urodziny Babci" : type === "trip" ? "np. Wakacje — Grecja" : "np. Wizyta u dentysty"} />
       </div>
-      <div style={{ marginBottom: 16 }}>
-        <label style={lbl}>Dodaj do kalendarza</label>
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={lbl}>Dla kogo</label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {FAMILY.map(p => (
-            <button key={p.id} onClick={() => setCalendarOwner(p.id)} style={{ padding: "7px 18px", borderRadius: 20, border: "2px solid", borderColor: calendarOwner === p.id ? p.color : "#eee", backgroundColor: calendarOwner === p.id ? p.color : "#fafafa", color: calendarOwner === p.id ? (p.textDark ? "#7a2a4a" : "white") : "#aaa", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer", transition: "all 0.15s" }}>{p.name}</button>
+            <button key={p.id} onClick={() => setCalendarOwner(p.id)} style={{ padding: "8px 16px", borderRadius: 20, border: "2px solid", borderColor: calendarOwner === p.id ? p.color : "#eee", backgroundColor: calendarOwner === p.id ? p.color : "#fafafa", color: calendarOwner === p.id ? (p.textDark ? "#7a2a4a" : "white") : "#aaa", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
+              {p.name}
+            </button>
           ))}
         </div>
       </div>
+
       {type === "trip" ? (
-        <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
           <div style={{ flex: 1 }}><label style={lbl}>Od</label><input type="date" style={inp} value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
           <div style={{ flex: 1 }}><label style={lbl}>Do</label><input type="date" style={inp} value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
         </div>
       ) : (
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 14 }}>
           <label style={lbl}>{type === "birthday" ? "Data urodzin" : "Data"}</label>
           <input type="date" style={inp} value={date} onChange={e => setDate(e.target.value)} />
         </div>
       )}
+
       {type === "event" && (
-        <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
           <div style={{ flex: 1 }}><label style={lbl}>Początek</label><input type="time" style={inp} value={start} onChange={e => setStart(e.target.value)} /></div>
           <div style={{ flex: 1 }}><label style={lbl}>Koniec</label><input type="time" style={inp} value={end} onChange={e => setEnd(e.target.value)} /></div>
         </div>
       )}
-      {type === "birthday" && <div style={{ backgroundColor: "#fff8f0", border: "1px solid #ffe0b2", borderRadius: 10, padding: "10px 14px", marginBottom: 16 }}><div style={{ fontSize: 13, color: "#e65100", fontWeight: 500 }}>🔁 Urodziny będą pojawiać się co roku automatycznie.</div></div>}
-      {error && <div style={{ backgroundColor: "#fff0f0", border: "1px solid #ffcccc", borderRadius: 10, padding: "10px 14px", marginBottom: 16, color: "#cc0000", fontSize: 13 }}>{error}</div>}
+
+      {type === "birthday" && <div style={{ backgroundColor: "#fff8f0", border: "1px solid #ffe0b2", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}><div style={{ fontSize: 13, color: "#e65100", fontWeight: 500 }}>🔁 Będą pojawiać się co roku.</div></div>}
+      {error && <div style={{ backgroundColor: "#fff0f0", border: "1px solid #ffcccc", borderRadius: 10, padding: "10px 14px", marginBottom: 14, color: "#cc0000", fontSize: 13 }}>{error}</div>}
+
       <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-        <button onClick={onCancel} style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, color: "#666" }}>Anuluj</button>
-        <button onClick={handleSubmit} style={{ flex: 2, padding: "12px", borderRadius: 12, border: "none", backgroundColor: "#1a1a2e", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14, color: "white", boxShadow: "0 2px 12px rgba(26,26,46,0.25)" }}>Zapisz w Google Calendar</button>
+        <button onClick={onCancel} style={{ flex: 1, padding: "13px", borderRadius: 12, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, color: "#666" }}>Anuluj</button>
+        <button onClick={handleSubmit} style={{ flex: 2, padding: "13px", borderRadius: 12, border: "none", backgroundColor: "#1a1a2e", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14, color: "white" }}>Zapisz</button>
       </div>
     </div>
   );
 }
 
+// ---- LOGIN ----
 function LoginScreen({ onLogin }) {
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#f5f4f0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ minHeight: "100vh", backgroundColor: "#f5f4f0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif", padding: 24 }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-      <div style={{ backgroundColor: "white", borderRadius: 20, padding: 48, textAlign: "center", boxShadow: "0 4px 32px rgba(0,0,0,0.08)", maxWidth: 360, width: "100%" }}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>🏠</div>
-        <h1 style={{ fontSize: 26, fontWeight: 800, color: "#1a1a2e", margin: "0 0 8px" }}>Rodzinny Kalendarz</h1>
-        <p style={{ color: "#888", fontSize: 15, margin: "0 0 32px", lineHeight: 1.5 }}>Zaloguj się swoim kontem Google, żeby zobaczyć kalendarz całej rodziny.</p>
-        <button onClick={onLogin} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 15, color: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
+      <div style={{ backgroundColor: "white", borderRadius: 20, padding: "40px 32px", textAlign: "center", boxShadow: "0 4px 32px rgba(0,0,0,0.08)", maxWidth: 360, width: "100%" }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>🏠</div>
+        <h1 style={{ fontSize: 24, fontWeight: 800, color: "#1a1a2e", margin: "0 0 8px" }}>Rodzinny Kalendarz</h1>
+        <p style={{ color: "#888", fontSize: 14, margin: "0 0 28px", lineHeight: 1.5 }}>Zaloguj się swoim kontem Google żeby zobaczyć kalendarz całej rodziny.</p>
+        <button onClick={onLogin} style={{ width: "100%", padding: "14px", borderRadius: 12, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 15, color: "#1a1a2e", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
           <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20H24v8h11.3C33.6 33.1 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34.1 6.5 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20c11 0 19.7-8 19.7-20 0-1.3-.1-2.7-.1-4z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 15.1 18.9 12 24 12c3 0 5.7 1.1 7.8 2.9l5.7-5.7C34.1 6.5 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-1.9 13.5-5l-6.2-5.2C29.5 35.5 26.9 36 24 36c-5.2 0-9.6-2.9-11.3-7.1l-6.5 5C9.5 39.5 16.3 44 24 44z"/><path fill="#1976D2" d="M43.6 20H24v8h11.3c-.8 2.3-2.3 4.2-4.3 5.5l6.2 5.2C40.8 35.5 44 30.1 44 24c0-1.3-.1-2.7-.4-4z"/></svg>
           Zaloguj się przez Google
         </button>
-        <p style={{ color: "#ccc", fontSize: 12, marginTop: 20 }}>Tylko dla członków rodziny Grzywnowicz</p>
+        <p style={{ color: "#ccc", fontSize: 11, marginTop: 16 }}>Tylko dla rodziny Grzywnowicz</p>
       </div>
     </div>
   );
 }
 
+// ---- MAIN APP ----
 export default function App() {
   const [page, setPage] = useState("calendar");
   const [view, setView] = useState("day");
@@ -330,54 +480,68 @@ export default function App() {
   const [token, setToken] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [tokenClient, setTokenClient] = useState(null);
+  const [editingEvent, setEditingEvent] = useState(null);
   const today = new Date();
 
   useEffect(() => {
     loadGoogleScript().then(() => {
       if (!window.google) return;
       const tc = window.google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
-        scope: SCOPES,
-        callback: (resp) => {
-          if (resp.access_token) { setToken(resp.access_token); fetchUserInfo(resp.access_token); }
-        },
+        client_id: CLIENT_ID, scope: SCOPES,
+        callback: (resp) => { if (resp.access_token) { setToken(resp.access_token); fetchUserInfo(resp.access_token); } },
       });
       setTokenClient(tc);
     });
   }, []);
 
-  async function fetchUserInfo(accessToken) {
-    const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
-    const data = await res.json();
-    setCurrentUser({ email: data.email, name: data.name });
+  async function fetchUserInfo(t) {
+    const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${t}` } });
+    const d = await res.json();
+    setCurrentUser({ email: d.email, name: d.name });
   }
 
-  const loadEvents = useCallback(async (accessToken) => {
+  const loadEvents = useCallback(async (t) => {
     setLoading(true);
     const timeMin = new Date(); timeMin.setMonth(timeMin.getMonth() - 1);
     const timeMax = new Date(); timeMax.setMonth(timeMax.getMonth() + 3);
-    const allEvents = [];
+    const all = [];
     for (const person of FAMILY) {
       try {
-        const items = await fetchCalendarEvents(accessToken, person.id, timeMin, timeMax);
-        const parsed = parseGoogleEvents(items, person.id, person.color);
-        allEvents.push(...parsed);
+        const items = await fetchCalendarEvents(t, person.id, timeMin, timeMax);
+        all.push(...parseGoogleEvents(items, person.id, person.color));
       } catch (e) {}
     }
-    setEvents(allEvents);
+    setEvents(all);
     setLoading(false);
   }, []);
 
   useEffect(() => { if (token) loadEvents(token); }, [token, loadEvents]);
 
-  function handleLogin() { if (tokenClient) tokenClient.requestAccessToken(); }
-
   async function handleAddEvent(eventData) {
     if (!token) return;
     const person = FAMILY.find(f => f.id === eventData.personEmail);
     if (!person) return;
-    const ok = await createCalendarEvent(token, person.id, eventData);
-    if (ok) { await loadEvents(token); setPage("calendar"); }
+    await createCalendarEvent(token, person.id, eventData);
+    await loadEvents(token);
+    setPage("calendar");
+  }
+
+  async function handleSaveEdit(eventData) {
+    if (!token) return;
+    const person = FAMILY.find(f => f.id === eventData.personEmail);
+    if (!person) return;
+    await updateCalendarEvent(token, person.id, eventData.id, eventData);
+    await loadEvents(token);
+    setEditingEvent(null);
+  }
+
+  async function handleDeleteEvent(ev) {
+    if (!token) return;
+    const person = FAMILY.find(f => f.id === ev.personEmail);
+    if (!person) return;
+    await deleteCalendarEvent(token, person.id, ev.id);
+    await loadEvents(token);
+    setEditingEvent(null);
   }
 
   function togglePerson(id) { setActivePersons(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]); }
@@ -396,64 +560,87 @@ export default function App() {
     return `${getMonthName(currentDate.getMonth())} ${currentDate.getFullYear()}`;
   };
 
-  if (!token) return <LoginScreen onLogin={handleLogin} />;
+  if (!token) return <LoginScreen onLogin={() => tokenClient?.requestAccessToken()} />;
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#f5f4f0", fontFamily: "'DM Sans', sans-serif", paddingBottom: 40 }}>
+    <div style={{ minHeight: "100vh", backgroundColor: "#f5f4f0", fontFamily: "'DM Sans', sans-serif", paddingBottom: 32 }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-      <div style={{ backgroundColor: "#fff", borderBottom: "1px solid #ebebeb", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 12px rgba(0,0,0,0.04)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 22 }}>🏠</span>
-          <span style={{ fontSize: 18, fontWeight: 800, color: "#1a1a2e", letterSpacing: -0.5 }}>Rodzinny Kalendarz</span>
+      <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+
+      {/* HEADER — mobile friendly */}
+      <div style={{ backgroundColor: "#fff", borderBottom: "1px solid #ebebeb", position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 12px rgba(0,0,0,0.04)" }}>
+        <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 20 }}>🏠</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "#1a1a2e" }}>Rodzinny Kalendarz</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {loading && <span style={{ fontSize: 11, color: "#bbb" }}>⏳</span>}
+            <button onClick={() => loadEvents(token)} style={{ width: 34, height: 34, borderRadius: 9, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>↻</button>
+            <button onClick={() => setPage(page === "calendar" ? "add" : "calendar")} style={{ padding: "8px 14px", borderRadius: 10, border: "none", backgroundColor: page === "add" ? "#eee" : "#1a1a2e", color: page === "add" ? "#666" : "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 13 }}>
+              {page === "add" ? "← Wróć" : "+ Dodaj"}
+            </button>
+          </div>
         </div>
         {page === "calendar" && (
-          <div style={{ display: "flex", gap: 2, backgroundColor: "#f0f0ec", borderRadius: 12, padding: 3 }}>
-            {[["day","Dziś"],["week","Tydzień"],["month","Miesiąc"]].map(([v, label]) => (
-              <button key={v} onClick={() => setView(v)} style={{ padding: "6px 14px", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 13, backgroundColor: view === v ? "#1a1a2e" : "transparent", color: view === v ? "#fff" : "#666", transition: "all 0.15s" }}>{label}</button>
-            ))}
+          <div style={{ padding: "0 16px 10px", display: "flex", gap: 2, backgroundColor: "white" }}>
+            <div style={{ display: "flex", gap: 2, backgroundColor: "#f0f0ec", borderRadius: 10, padding: 3, flex: 1 }}>
+              {[["day","Dziś"],["week","Tydzień"],["month","Miesiąc"]].map(([v, label]) => (
+                <button key={v} onClick={() => setView(v)} style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: "none", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 13, backgroundColor: view === v ? "#1a1a2e" : "transparent", color: view === v ? "#fff" : "#666", transition: "all 0.15s" }}>{label}</button>
+              ))}
+            </div>
           </div>
         )}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {loading && <span style={{ fontSize: 12, color: "#aaa" }}>Ładowanie...</span>}
-          <button onClick={() => setPage(page === "calendar" ? "add" : "calendar")} style={{ padding: "8px 18px", borderRadius: 10, border: "none", backgroundColor: page === "add" ? "#eee" : "#1a1a2e", color: page === "add" ? "#666" : "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 13 }}>
-            {page === "add" ? "← Wróć" : "+ Dodaj"}
-          </button>
-        </div>
       </div>
+
       {page === "add" ? (
-        <div style={{ padding: "32px 24px" }}>
-          <div style={{ backgroundColor: "#fff", borderRadius: 16, padding: 28, boxShadow: "0 2px 20px rgba(0,0,0,0.06)", maxWidth: 560, margin: "0 auto" }}>
+        <div style={{ padding: "20px 16px" }}>
+          <div style={{ backgroundColor: "#fff", borderRadius: 16, padding: 20, boxShadow: "0 2px 20px rgba(0,0,0,0.06)" }}>
             <AddEventPage onAdd={handleAddEvent} onCancel={() => setPage("calendar")} currentUser={currentUser} />
           </div>
         </div>
       ) : (
         <>
-          <div style={{ backgroundColor: "#fff", borderBottom: "1px solid #ebebeb", padding: "10px 24px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {/* PERSON FILTERS */}
+          <div style={{ backgroundColor: "#fff", borderBottom: "1px solid #ebebeb", padding: "8px 16px", display: "flex", gap: 6, flexWrap: "wrap" }}>
             {FAMILY.map(person => {
               const active = activePersons.includes(person.id);
-              return <button key={person.id} onClick={() => togglePerson(person.id)} style={{ padding: "6px 16px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 13, backgroundColor: active ? person.color : "#f0f0f0", color: active ? (person.textDark ? "#7a2a4a" : "white") : "#aaa", transition: "all 0.15s", boxShadow: active ? `0 2px 8px ${person.color}44` : "none" }}>{person.name}</button>;
+              return <button key={person.id} onClick={() => togglePerson(person.id)} style={{ padding: "6px 14px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 13, backgroundColor: active ? person.color : "#f0f0f0", color: active ? (person.textDark ? "#7a2a4a" : "white") : "#aaa", transition: "all 0.15s", WebkitTapHighlightColor: "transparent" }}>{person.name}</button>;
             })}
           </div>
-          <div style={{ padding: "20px 24px 0" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-              <button onClick={() => navigate(-1)} style={{ width: 36, height: 36, borderRadius: 10, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
-              <span style={{ fontSize: 16, fontWeight: 700, color: "#1a1a2e", minWidth: 220 }}>{navLabel()}</span>
-              <button onClick={() => navigate(1)} style={{ width: 36, height: 36, borderRadius: 10, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
-              <button onClick={() => setCurrentDate(today)} style={{ padding: "7px 14px", borderRadius: 10, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 12, color: "#444" }}>Dzisiaj</button>
-              <button onClick={() => loadEvents(token)} style={{ padding: "7px 14px", borderRadius: 10, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 12, color: "#444" }}>↻ Odśwież</button>
+
+          <div style={{ padding: "14px 16px 0" }}>
+            {/* DATE NAV */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <button onClick={() => navigate(-1)} style={{ width: 38, height: 38, borderRadius: 10, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>‹</button>
+              <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: "#1a1a2e", textAlign: "center" }}>{navLabel()}</span>
+              <button onClick={() => navigate(1)} style={{ width: 38, height: 38, borderRadius: 10, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>›</button>
+              <button onClick={() => setCurrentDate(today)} style={{ padding: "7px 12px", borderRadius: 10, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 12, color: "#444", flexShrink: 0 }}>Dziś</button>
             </div>
-            <div style={{ backgroundColor: "#fff", borderRadius: 16, padding: 24, boxShadow: "0 2px 20px rgba(0,0,0,0.06)", minHeight: 400 }}>
-              {view === "day" && <DayView date={currentDate} events={events} activePersons={activePersons} />}
-              {view === "week" && <WeekView date={currentDate} events={events} activePersons={activePersons} />}
+
+            <div style={{ backgroundColor: "#fff", borderRadius: 14, padding: "16px 12px", boxShadow: "0 2px 16px rgba(0,0,0,0.06)", minHeight: 360 }}>
+              {view === "day" && <DayView date={currentDate} events={events} activePersons={activePersons} onEdit={setEditingEvent} token={token} loadEvents={loadEvents} />}
+              {view === "week" && <WeekView date={currentDate} events={events} activePersons={activePersons} onEdit={setEditingEvent} />}
               {view === "month" && <MonthView date={currentDate} events={events} activePersons={activePersons} onDayClick={d => { setCurrentDate(d); setView("day"); }} />}
             </div>
-            <div style={{ marginTop: 16, display: "flex", gap: 16, flexWrap: "wrap", padding: "0 4px" }}>
-              {FAMILY.map(p => <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: p.color }} /><span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>{p.name}</span></div>)}
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#E8475F" }} /><span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>Urodziny</span></div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#4A90D9" }} /><span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>Wyjazd</span></div>
+
+            <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap", padding: "0 2px" }}>
+              {FAMILY.map(p => <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: p.color }} /><span style={{ fontSize: 11, color: "#999", fontWeight: 500 }}>{p.name}</span></div>)}
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: "#E8475F" }} /><span style={{ fontSize: 11, color: "#999", fontWeight: 500 }}>Urodziny</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: "#4A90D9" }} /><span style={{ fontSize: 11, color: "#999", fontWeight: 500 }}>Wyjazd</span></div>
             </div>
           </div>
         </>
+      )}
+
+      {/* EDIT MODAL */}
+      {editingEvent && (
+        <EditModal
+          ev={editingEvent}
+          onSave={handleSaveEdit}
+          onDelete={handleDeleteEvent}
+          onClose={() => setEditingEvent(null)}
+        />
       )}
     </div>
   );
