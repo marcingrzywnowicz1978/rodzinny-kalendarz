@@ -70,10 +70,22 @@ function loadGoogleScript() {
   });
 }
 async function fetchCalendarEvents(token, calendarId, timeMin, timeMax) {
-  const params = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), singleEvents: true, orderBy: "startTime", maxResults: 250, fields: "items(id,summary,start,end,recurringEventId,recurrence)" });
+  const params = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), singleEvents: true, orderBy: "startTime", maxResults: 250, fields: "items(id,summary,start,end,recurringEventId)" });
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) return [];
-  return (await res.json()).items || [];
+  const items = (await res.json()).items || [];
+
+  // Pobierz rrule dla unikalnych master eventów
+  const masterIds = [...new Set(items.filter(i => i.recurringEventId).map(i => i.recurringEventId))];
+  const rruleMap = {};
+  await Promise.all(masterIds.map(async (masterId) => {
+    try {
+      const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${masterId}?fields=recurrence`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) { const d = await r.json(); if (d.recurrence?.[0]) rruleMap[masterId] = d.recurrence[0]; }
+    } catch {}
+  }));
+
+  return items.map(i => ({ ...i, rrule: i.recurringEventId ? (rruleMap[i.recurringEventId] || null) : null }));
 }
 function buildRRule(recurrence) {
   if (!recurrence || recurrence.freq === "none") return null;
@@ -161,7 +173,7 @@ function parseGoogleEvents(items, personEmail, personColor) {
     return {
       id: item.id,
       recurringEventId: item.recurringEventId || null,
-      rrule: item.recurrence?.[0] || null,
+      rrule: item.rrule || null,
       type: isMultiDay ? "trip" : "event",
       title: item.summary || "(bez tytułu)", personEmail, color: personColor,
       date, dateFrom: date,
