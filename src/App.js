@@ -198,6 +198,9 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
   const [recurrence, setRecurrence] = useState(() => ev.rrule ? parseRRule(ev.rrule) : { freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
   const [personEmail, setPersonEmail] = useState(ev.personEmail);
   const [allDay, setAllDay] = useState(ev.allDay);
+  const [type, setType] = useState(ev.type || "event");
+  const [dateFrom, setDateFrom] = useState(formatDate(ev.dateFrom || ev.date));
+  const [dateTo, setDateTo] = useState(formatDate(ev.dateTo || ev.date));
   const [saving, setSaving] = useState(false);
   const [step, setStep] = useState("edit");
   const isRecurring = !!ev.recurringEventId;
@@ -209,7 +212,14 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
 
   async function doSave(scope) {
     setSaving(true);
-    await onSave({ ...ev, title, date: parseDate(date), start: allDay ? null : start, end: allDay ? null : end, allDay, personEmail, color: selectedPerson?.color, originalPersonEmail: ev.personEmail, recurrence }, scope);
+    const base = { ...ev, title, personEmail, color: selectedPerson?.color, originalPersonEmail: ev.personEmail, recurrence, type };
+    if (type === "trip") {
+      await onSave({ ...base, dateFrom: parseDate(dateFrom), dateTo: parseDate(dateTo), date: parseDate(dateFrom), allDay: true, start: null, end: null }, scope);
+    } else if (type === "birthday") {
+      await onSave({ ...base, date: parseDate(date), allDay: true, start: null, end: null }, scope);
+    } else {
+      await onSave({ ...base, date: parseDate(date), start: allDay ? null : start, end: allDay ? null : end, allDay }, scope);
+    }
     setSaving(false);
   }
 
@@ -250,6 +260,17 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
         {step === "edit" && (
           <>
             <div style={{ marginBottom: 14 }}>
+              <label style={lbl}>Typ</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[{id:"event",icon:"📅",label:"Wydarzenie"},{id:"birthday",icon:"🎂",label:"Urodziny"},{id:"trip",icon:"✈️",label:"Wyjazd"}].map(t => (
+                  <button key={t.id} onClick={() => setType(t.id)} style={{ flex: 1, padding: "8px 4px", borderRadius: 10, border: "2px solid", borderColor: type === t.id ? "#1a1a2e" : "#eee", backgroundColor: type === t.id ? "#1a1a2e" : "#fafafa", cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}>
+                    <div style={{ fontSize: 16, marginBottom: 2 }}>{t.icon}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: type === t.id ? "#fff" : "#444" }}>{t.label}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ marginBottom: 14 }}>
               <label style={lbl}>Tytuł</label>
               <input style={inp} value={title} onChange={e => setTitle(e.target.value)} />
             </div>
@@ -261,35 +282,50 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
                 ))}
               </div>
             </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={lbl}>Data</label>
-              <input type="date" style={inp} value={date} onChange={e => setDate(e.target.value)} />
-            </div>
-            <div style={{ marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
-              <label style={{ ...lbl, marginBottom: 0 }}>Całodniowe</label>
-              <button onClick={() => setAllDay(!allDay)} style={{ width: 44, height: 26, borderRadius: 13, border: "none", backgroundColor: allDay ? "#1a1a2e" : "#ddd", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
-                <div style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: "white", position: "absolute", top: 3, left: allDay ? 21 : 3, transition: "left 0.2s" }} />
-              </button>
-            </div>
-            {!allDay && (
-              <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>Początek</label>
-                  <input type="time" style={inp} value={start} onChange={e => {
-                    const newStart = e.target.value;
-                    setStart(newStart);
-                    const newEndMin = timeToMinutes(newStart) + 60;
-                    if (newEndMin <= 23 * 60) setEnd(minutesToTime(newEndMin));
-                  }} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>Koniec</label>
-                  <input type="time" style={inp} value={end} min={minutesToTime(timeToMinutes(start) + 15)} onChange={e => setEnd(e.target.value)} />
-                </div>
+
+            {type === "trip" ? (
+              <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+                <div style={{ flex: 1 }}><label style={lbl}>Od</label><input type="date" style={inp} value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
+                <div style={{ flex: 1 }}><label style={lbl}>Do</label><input type="date" style={inp} value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
+              </div>
+            ) : (
+              <div style={{ marginBottom: 14 }}>
+                <label style={lbl}>{type === "birthday" ? "Data urodzin" : "Data"}</label>
+                <input type="date" style={inp} value={date} onChange={e => setDate(e.target.value)} />
               </div>
             )}
 
-            <RecurrencePanel recurrence={recurrence} onChange={setRecurrence} inp={inp} lbl={lbl} />
+            {type === "event" && (
+              <>
+                <div style={{ marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
+                  <label style={{ ...lbl, marginBottom: 0 }}>Całodniowe</label>
+                  <button onClick={() => setAllDay(!allDay)} style={{ width: 44, height: 26, borderRadius: 13, border: "none", backgroundColor: allDay ? "#1a1a2e" : "#ddd", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
+                    <div style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: "white", position: "absolute", top: 3, left: allDay ? 21 : 3, transition: "left 0.2s" }} />
+                  </button>
+                </div>
+                {!allDay && (
+                  <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={lbl}>Początek</label>
+                      <input type="time" style={inp} value={start} onChange={e => {
+                        const newStart = e.target.value;
+                        setStart(newStart);
+                        const newEndMin = timeToMinutes(newStart) + 60;
+                        if (newEndMin <= 23 * 60) setEnd(minutesToTime(newEndMin));
+                      }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={lbl}>Koniec</label>
+                      <input type="time" style={inp} value={end} min={minutesToTime(timeToMinutes(start) + 15)} onChange={e => setEnd(e.target.value)} />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {type === "birthday" && <div style={{ backgroundColor: "#fff8f0", border: "1px solid #ffe0b2", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}><div style={{ fontSize: 13, color: "#e65100", fontWeight: 500 }}>🔁 Będą pojawiać się co roku.</div></div>}
+
+            {type === "event" && <RecurrencePanel recurrence={recurrence} onChange={setRecurrence} inp={inp} lbl={lbl} />}
 
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button onClick={() => setStep("delete_scope")} style={{ padding: "12px 16px", borderRadius: 12, border: "none", backgroundColor: "#fff0f0", color: "#cc3333", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14 }}>🗑 Usuń</button>
