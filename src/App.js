@@ -107,7 +107,7 @@ function buildRRule(recurrence) {
 
 async function createCalendarEvent(token, calendarId, eventData) {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const dateStr = formatDate(eventData.date);
+  const dateStr = formatDate(eventData.date || eventData.dateFrom);
   const body = {
     summary: eventData.title,
     start: eventData.allDay
