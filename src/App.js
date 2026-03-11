@@ -91,14 +91,15 @@ function buildRRule(recurrence) {
 
 async function createCalendarEvent(token, calendarId, eventData) {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const dateStr = formatDate(eventData.date);
   const body = {
     summary: eventData.title,
     start: eventData.allDay
-      ? { date: formatDate(eventData.date) }
-      : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.start}:00`).toISOString(), timeZone: tz },
+      ? { date: dateStr }
+      : { dateTime: `${dateStr}T${eventData.start}:00`, timeZone: tz },
     end: eventData.allDay
-      ? { date: formatDate(eventData.date) }
-      : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.end}:00`).toISOString(), timeZone: tz },
+      ? { date: dateStr }
+      : { dateTime: `${dateStr}T${eventData.end}:00`, timeZone: tz },
   };
   if (eventData.type === "birthday") body.recurrence = ["RRULE:FREQ=YEARLY"];
   if (eventData.type === "trip") {
@@ -111,6 +112,7 @@ async function createCalendarEvent(token, calendarId, eventData) {
     if (rule) body.recurrence = [rule];
   }
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) { const err = await res.json(); console.error("Google API error:", err); }
   return res.ok;
 }
 async function updateCalendarEvent(token, calendarId, eventId, eventData) {
