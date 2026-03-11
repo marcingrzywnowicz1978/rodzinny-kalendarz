@@ -162,6 +162,7 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
   const [date, setDate] = useState(formatDate(ev.date));
   const [start, setStart] = useState(ev.start || "09:00");
   const [end, setEnd] = useState(ev.end || "10:00");
+  const [personEmail, setPersonEmail] = useState(ev.personEmail);
   const [recurrence, setRecurrence] = useState({ freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
   const [saving, setSaving] = useState(false);
   const [step, setStep] = useState("edit");
@@ -169,12 +170,12 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
 
   const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#1a1a2e", backgroundColor: "#fafafa", boxSizing: "border-box", outline: "none" };
   const lbl = { fontSize: 11, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 5 };
-  const person = FAMILY.find(f => f.id === ev.personEmail);
-  const color = eventColor(ev);
+  const selectedPerson = FAMILY.find(f => f.id === personEmail);
+  const color = selectedPerson?.color || eventColor(ev);
 
   async function doSave(scope) {
     setSaving(true);
-    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end, recurrence }, scope);
+    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end, personEmail, color: selectedPerson?.color, originalPersonEmail: ev.personEmail, recurrence }, scope);
     setSaving(false);
   }
 
@@ -203,7 +204,7 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
           <div style={{ width: 14, height: 14, borderRadius: 4, backgroundColor: color, flexShrink: 0 }} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#888" }}>{person?.name}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#888" }}>{selectedPerson?.name}</span>
           {isRecurring && <span style={{ fontSize: 11, backgroundColor: "#f0f0f0", borderRadius: 6, padding: "2px 8px", color: "#888", fontWeight: 600 }}>🔁 Cykliczne</span>}
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "none", backgroundColor: "#f0f0f0", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", color: "#666" }}>×</button>
@@ -217,6 +218,14 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
             <div style={{ marginBottom: 14 }}>
               <label style={lbl}>Tytuł</label>
               <input style={inp} value={title} onChange={e => setTitle(e.target.value)} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={lbl}>Dla kogo</label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {FAMILY.map(f => (
+                  <button key={f.id} onClick={() => setPersonEmail(f.id)} style={{ padding: "8px 16px", borderRadius: 20, border: "2px solid", borderColor: personEmail === f.id ? f.color : "#ddd", backgroundColor: personEmail === f.id ? f.color : "white", color: personEmail === f.id ? (f.textDark ? "#7a2a4a" : "white") : "#555", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{f.name}</button>
+                ))}
+              </div>
             </div>
             <div style={{ marginBottom: 14 }}>
               <label style={lbl}>Data</label>
@@ -713,9 +722,16 @@ export default function App() {
 
   async function handleSaveEdit(eventData, scope) {
     if (!token) return;
-    const person = FAMILY.find(f => f.id === eventData.personEmail);
-    if (!person) return;
-    await updateCalendarEvent(token, person.id, eventData.id, eventData, scope);
+    const newPerson = FAMILY.find(f => f.id === eventData.personEmail);
+    if (!newPerson) return;
+    // Jeśli zmieniono właściciela — usuń stare, utwórz nowe
+    if (eventData.originalPersonEmail && eventData.originalPersonEmail !== eventData.personEmail) {
+      const oldPerson = FAMILY.find(f => f.id === eventData.originalPersonEmail);
+      if (oldPerson) await deleteCalendarEvent(token, oldPerson.id, eventData.id, eventData.recurringEventId, scope);
+      await createCalendarEvent(token, newPerson.id, eventData);
+    } else {
+      await updateCalendarEvent(token, newPerson.id, eventData.id, eventData, scope);
+    }
     await loadEvents(token);
     setEditingEvent(null);
   }
