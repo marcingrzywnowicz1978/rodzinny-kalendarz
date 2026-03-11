@@ -345,30 +345,49 @@ function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
             <div style={{ flex: 1, borderTop: "1px solid #f0f0f0", height: SLOT_HEIGHT }} />
           </div>
         ))}
-        {timedEvs.map(ev => {
-          const color = eventColor(ev);
-          const dark = isTextDark(ev);
-          const startMin = timeToMinutes(ev.start) - START_HOUR * 60;
-          const endMin = timeToMinutes(ev.end || ev.start) - START_HOUR * 60 + (ev.end ? 0 : 60);
-          const top = (startMin / 60) * SLOT_HEIGHT;
-          const height = Math.max(((endMin - startMin) / 60) * SLOT_HEIGHT, 36);
-          const person = FAMILY.find(f => f.id === ev.personEmail);
-          return (
-            <div key={ev.id}
-              draggable
-              onDragStart={e => handleDragStart(e, ev)}
-              onTouchStart={e => handleTouchStart(e, ev)}
-              onTouchEnd={handleTouchEnd}
-              onClick={() => onEdit(ev)}
-              style={{ position: "absolute", top, left: 52, right: 0, height, backgroundColor: color, borderRadius: 10, padding: "5px 10px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: `0 2px 8px ${color}55`, cursor: "grab", touchAction: "none", WebkitTapHighlightColor: "transparent", border: "2px solid rgba(255,255,255,0.35)" }}
-            >
-              <div style={{ color: dark ? "#7a2a4a" : "white", fontWeight: 700, fontSize: 13, lineHeight: 1.2 }}>{ev.title}</div>
-              <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 1 }}>
-                {person?.name} · {ev.start}{ev.end ? `–${ev.end}` : ""}
+        {(() => {
+          // Oblicz kolumny dla nakładających się wydarzeń
+          const cols = [];
+          timedEvs.forEach(ev => {
+            const s = timeToMinutes(ev.start);
+            const e = timeToMinutes(ev.end || ev.start) + (ev.end ? 0 : 60);
+            let placed = false;
+            for (let ci = 0; ci < cols.length; ci++) {
+              const last = cols[ci][cols[ci].length - 1];
+              const ls = timeToMinutes(last.start);
+              const le = timeToMinutes(last.end || last.start) + (last.end ? 0 : 60);
+              if (s >= le) { cols[ci].push(ev); placed = true; break; }
+            }
+            if (!placed) cols.push([ev]);
+          });
+          const totalCols = cols.length;
+          return cols.flatMap((col, ci) => col.map(ev => {
+            const color = eventColor(ev);
+            const dark = isTextDark(ev);
+            const startMin = timeToMinutes(ev.start) - START_HOUR * 60;
+            const endMin = timeToMinutes(ev.end || ev.start) - START_HOUR * 60 + (ev.end ? 0 : 60);
+            const top = (startMin / 60) * SLOT_HEIGHT;
+            const height = Math.max(((endMin - startMin) / 60) * SLOT_HEIGHT, 36);
+            const person = FAMILY.find(f => f.id === ev.personEmail);
+            const colWidth = `calc((100% - 52px) / ${totalCols})`;
+            const colLeft = `calc(52px + ${ci} * (100% - 52px) / ${totalCols})`;
+            return (
+              <div key={ev.id}
+                draggable
+                onDragStart={e => handleDragStart(e, ev)}
+                onTouchStart={e => handleTouchStart(e, ev)}
+                onTouchEnd={handleTouchEnd}
+                onClick={() => onEdit(ev)}
+                style={{ position: "absolute", top, left: colLeft, width: colWidth, height, backgroundColor: color, borderRadius: 10, padding: "5px 8px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: `0 2px 8px ${color}55`, cursor: "grab", touchAction: "none", WebkitTapHighlightColor: "transparent", border: "2px solid rgba(255,255,255,0.35)" }}
+              >
+                <div style={{ color: dark ? "#7a2a4a" : "white", fontWeight: 700, fontSize: 13, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</div>
+                <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {person?.name} · {ev.start}{ev.end ? `–${ev.end}` : ""}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          }));
+        })()}
       </div>
     </div>
   );
