@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const CLIENT_ID = "346630044108-7alqhklonsgivjnvfmn5mho6mtc3csrv.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/calendar";
-const SESSION_KEY = "gsi_token";
 
 const FAMILY = [
   { id: "agata.goc.grzywnowicz@gmail.com",   name: "Mama",   color: "#F4820A" },
@@ -76,6 +75,20 @@ async function fetchCalendarEvents(token, calendarId, timeMin, timeMax) {
   if (!res.ok) return [];
   return (await res.json()).items || [];
 }
+function buildRRule(recurrence) {
+  if (!recurrence || recurrence.freq === "none") return null;
+  const { freq, interval, days, endType, endCount, endDate } = recurrence;
+  let rule = `RRULE:FREQ=${freq.toUpperCase()}`;
+  if (interval > 1) rule += `;INTERVAL=${interval}`;
+  if (freq === "weekly" && days && days.length > 0) {
+    const dayMap = { pn: "MO", wt: "TU", sr: "WE", cz: "TH", pt: "FR", sb: "SA", nd: "SU" };
+    rule += `;BYDAY=${days.map(d => dayMap[d]).join(",")}`;
+  }
+  if (endType === "count") rule += `;COUNT=${endCount}`;
+  if (endType === "date" && endDate) rule += `;UNTIL=${endDate.replace(/-/g,"")}T000000Z`;
+  return rule;
+}
+
 async function createCalendarEvent(token, calendarId, eventData) {
   const body = {
     summary: eventData.title,
@@ -87,6 +100,10 @@ async function createCalendarEvent(token, calendarId, eventData) {
     const nd = new Date(eventData.dateTo); nd.setDate(nd.getDate() + 1);
     body.start = { date: formatDate(eventData.dateFrom) };
     body.end = { date: formatDate(nd) };
+  }
+  if (eventData.type === "event" && eventData.recurrence) {
+    const rule = buildRRule(eventData.recurrence);
+    if (rule) body.recurrence = [rule];
   }
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return res.ok;
@@ -364,6 +381,80 @@ const EVENT_TYPES = [
   { id: "trip", label: "Wyjazd", icon: "✈️", desc: "Wielodniowy" },
 ];
 
+const WEEKDAYS = [
+  { id: "pn", label: "Pn" }, { id: "wt", label: "Wt" }, { id: "sr", label: "Śr" },
+  { id: "cz", label: "Cz" }, { id: "pt", label: "Pt" }, { id: "sb", label: "Sb" }, { id: "nd", label: "Nd" },
+];
+
+function RecurrencePanel({ recurrence, onChange, inp, lbl }) {
+  const { freq, interval, days, endType, endCount, endDate } = recurrence;
+
+  function set(key, val) { onChange({ ...recurrence, [key]: val }); }
+  function toggleDay(d) {
+    const next = days.includes(d) ? days.filter(x => x !== d) : [...days, d];
+    set("days", next);
+  }
+
+  return (
+    <div style={{ backgroundColor: "#f7f7f5", borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <div style={{ marginBottom: 12 }}>
+        <label style={lbl}>Wzorzec powtarzania</label>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {[["none","Nie"], ["daily","Codziennie"], ["weekly","Tygodniowo"], ["monthly","Miesięcznie"], ["yearly","Rocznie"]].map(([v, label]) => (
+            <button key={v} onClick={() => set("freq", v)} style={{ padding: "7px 14px", borderRadius: 20, border: "2px solid", borderColor: freq === v ? "#1a1a2e" : "#ddd", backgroundColor: freq === v ? "#1a1a2e" : "white", color: freq === v ? "white" : "#555", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {freq !== "none" && (
+        <>
+          {(freq === "weekly" || freq === "monthly" || freq === "daily") && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <label style={{ ...lbl, marginBottom: 0, whiteSpace: "nowrap" }}>Co ile</label>
+              <input type="number" min={1} max={99} value={interval} onChange={e => set("interval", parseInt(e.target.value) || 1)}
+                style={{ ...inp, width: 70, padding: "8px 12px" }} />
+              <span style={{ fontSize: 13, color: "#666" }}>
+                {freq === "daily" ? "dni" : freq === "weekly" ? "tygodni" : "miesięcy"}
+              </span>
+            </div>
+          )}
+
+          {freq === "weekly" && (
+            <div style={{ marginBottom: 12 }}>
+              <label style={lbl}>Dni tygodnia</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {WEEKDAYS.map(d => (
+                  <button key={d.id} onClick={() => toggleDay(d.id)} style={{ width: 36, height: 36, borderRadius: 10, border: "2px solid", borderColor: days.includes(d.id) ? "#1a1a2e" : "#ddd", backgroundColor: days.includes(d.id) ? "#1a1a2e" : "white", color: days.includes(d.id) ? "white" : "#666", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>{d.label}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginBottom: 4 }}>
+            <label style={lbl}>Koniec cyklu</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {[["never","Bez końca"], ["count","Po X wystąpieniach"], ["date","Do daty"]].map(([v, label]) => (
+                <label key={v} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                  <input type="radio" checked={endType === v} onChange={() => set("endType", v)} style={{ accentColor: "#1a1a2e", width: 16, height: 16 }} />
+                  <span style={{ fontSize: 14, color: "#444" }}>{label}</span>
+                  {v === "count" && endType === "count" && (
+                    <input type="number" min={1} max={999} value={endCount} onChange={e => set("endCount", parseInt(e.target.value) || 1)}
+                      style={{ ...inp, width: 70, padding: "6px 10px" }} />
+                  )}
+                  {v === "date" && endType === "date" && (
+                    <input type="date" value={endDate} onChange={e => set("endDate", e.target.value)}
+                      style={{ ...inp, flex: 1, padding: "6px 10px" }} />
+                  )}
+                </label>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function AddEventPage({ onAdd, onCancel, currentUser }) {
   const [type, setType] = useState("event");
   const [title, setTitle] = useState("");
@@ -374,13 +465,14 @@ function AddEventPage({ onAdd, onCancel, currentUser }) {
   const [start, setStart] = useState("09:00");
   const [end, setEnd] = useState("10:00");
   const [error, setError] = useState("");
+  const [recurrence, setRecurrence] = useState({ freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
 
   function handleSubmit() {
     if (!title.trim()) { setError("Wpisz tytuł wydarzenia."); return; }
     setError("");
     const person = FAMILY.find(f => f.id === calendarOwner);
     const base = { title: title.trim(), type, personEmail: calendarOwner, color: person?.color };
-    if (type === "event") onAdd({ ...base, date: parseDate(date), start, end, allDay: false });
+    if (type === "event") onAdd({ ...base, date: parseDate(date), start, end, allDay: false, recurrence });
     else if (type === "birthday") onAdd({ ...base, date: parseDate(date), allDay: true });
     else onAdd({ ...base, dateFrom: parseDate(dateFrom), dateTo: parseDate(dateTo), allDay: true });
   }
@@ -434,10 +526,13 @@ function AddEventPage({ onAdd, onCancel, currentUser }) {
       )}
 
       {type === "event" && (
-        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-          <div style={{ flex: 1 }}><label style={lbl}>Początek</label><input type="time" style={inp} value={start} onChange={e => setStart(e.target.value)} /></div>
-          <div style={{ flex: 1 }}><label style={lbl}>Koniec</label><input type="time" style={inp} value={end} onChange={e => setEnd(e.target.value)} /></div>
-        </div>
+        <>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+            <div style={{ flex: 1 }}><label style={lbl}>Początek</label><input type="time" style={inp} value={start} onChange={e => setStart(e.target.value)} /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Koniec</label><input type="time" style={inp} value={end} onChange={e => setEnd(e.target.value)} /></div>
+          </div>
+          <RecurrencePanel recurrence={recurrence} onChange={setRecurrence} inp={inp} lbl={lbl} />
+        </>
       )}
 
       {type === "birthday" && <div style={{ backgroundColor: "#fff8f0", border: "1px solid #ffe0b2", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}><div style={{ fontSize: 13, color: "#e65100", fontWeight: 500 }}>🔁 Będą pojawiać się co roku.</div></div>}
@@ -489,7 +584,7 @@ export default function App() {
       if (!window.google) return;
       const tc = window.google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID, scope: SCOPES,
-        callback: (resp) => { if (resp.access_token) { sessionStorage.setItem(SESSION_KEY, resp.access_token); setToken(resp.access_token); fetchUserInfo(resp.access_token); } },
+        callback: (resp) => { if (resp.access_token) { setToken(resp.access_token); fetchUserInfo(resp.access_token); } },
       });
       setTokenClient(tc);
     });
@@ -516,10 +611,6 @@ export default function App() {
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-  const saved = sessionStorage.getItem(SESSION_KEY);
-  if (saved) { setToken(saved); fetchUserInfo(saved); }
-}, []);
   useEffect(() => { if (token) loadEvents(token); }, [token, loadEvents]);
 
   async function handleAddEvent(eventData) {
