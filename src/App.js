@@ -383,7 +383,7 @@ function MonthView({ date, events, activePersons, onDayClick }) {
 
 // ---- ADD EVENT ----
 const EVENT_TYPES = [
-  { id: "event", label: "Spotkanie", icon: "📅", desc: "Z godziną" },
+  { id: "event", label: "Wydarzenie", icon: "📅", desc: "Z godziną" },
   { id: "birthday", label: "Urodziny", icon: "🎂", desc: "Co roku" },
   { id: "trip", label: "Wyjazd", icon: "✈️", desc: "Wielodniowy" },
 ];
@@ -535,8 +535,19 @@ function AddEventPage({ onAdd, onCancel, currentUser }) {
       {type === "event" && (
         <>
           <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Początek</label><input type="time" style={inp} value={start} onChange={e => setStart(e.target.value)} /></div>
-            <div style={{ flex: 1 }}><label style={lbl}>Koniec</label><input type="time" style={inp} value={end} onChange={e => setEnd(e.target.value)} /></div>
+            <div style={{ flex: 1 }}>
+              <label style={lbl}>Początek</label>
+              <input type="time" style={inp} value={start} onChange={e => {
+                const newStart = e.target.value;
+                setStart(newStart);
+                const newEndMin = timeToMinutes(newStart) + 60;
+                if (newEndMin <= 23 * 60) setEnd(minutesToTime(newEndMin));
+              }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={lbl}>Koniec</label>
+              <input type="time" style={inp} value={end} min={minutesToTime(timeToMinutes(start) + 15)} onChange={e => setEnd(e.target.value)} />
+            </div>
           </div>
           <RecurrencePanel recurrence={recurrence} onChange={setRecurrence} inp={inp} lbl={lbl} />
         </>
