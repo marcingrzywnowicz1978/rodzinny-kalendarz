@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const CLIENT_ID = "346630044108-7alqhklonsgivjnvfmn5mho6mtc3csrv.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/calendar";
+const SESSION_KEY = "gsi_token";
 
 const FAMILY = [
   { id: "agata.goc.grzywnowicz@gmail.com",   name: "Mama",   color: "#F4820A" },
@@ -488,7 +489,7 @@ export default function App() {
       if (!window.google) return;
       const tc = window.google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID, scope: SCOPES,
-        callback: (resp) => { if (resp.access_token) { setToken(resp.access_token); fetchUserInfo(resp.access_token); } },
+        callback: (resp) => { if (resp.access_token) { sessionStorage.setItem(SESSION_KEY, resp.access_token); setToken(resp.access_token); fetchUserInfo(resp.access_token); } },
       });
       setTokenClient(tc);
     });
@@ -515,6 +516,10 @@ export default function App() {
     setLoading(false);
   }, []);
 
+  useEffect(() => {
+  const saved = sessionStorage.getItem(SESSION_KEY);
+  if (saved) { setToken(saved); fetchUserInfo(saved); }
+}, []);
   useEffect(() => { if (token) loadEvents(token); }, [token, loadEvents]);
 
   async function handleAddEvent(eventData) {
