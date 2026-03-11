@@ -303,7 +303,7 @@ function DayView({ date, events, activePersons, onEdit, token, loadEvents }) {
               onTouchStart={e => handleTouchStart(e, ev)}
               onTouchEnd={handleTouchEnd}
               onClick={() => onEdit(ev)}
-              style={{ position: "absolute", top, left: 52, right: 0, height, backgroundColor: color, borderRadius: 10, padding: "5px 10px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: `0 2px 8px ${color}55`, cursor: "grab", touchAction: "none", WebkitTapHighlightColor: "transparent" }}
+              style={{ position: "absolute", top, left: 52, right: 0, height, backgroundColor: color, borderRadius: 10, padding: "5px 10px", boxSizing: "border-box", display: "flex", flexDirection: "column", justifyContent: "center", boxShadow: `0 2px 8px ${color}55`, cursor: "grab", touchAction: "none", WebkitTapHighlightColor: "transparent", border: "2px solid rgba(255,255,255,0.35)" }}
             >
               <div style={{ color: dark ? "#7a2a4a" : "white", fontWeight: 700, fontSize: 13, lineHeight: 1.2 }}>{ev.title}</div>
               <div style={{ color: dark ? "rgba(120,40,70,0.7)" : "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 1 }}>
