@@ -70,7 +70,7 @@ function loadGoogleScript() {
   });
 }
 async function fetchCalendarEvents(token, calendarId, timeMin, timeMax) {
-  const params = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), singleEvents: true, orderBy: "startTime", maxResults: 250 });
+  const params = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), singleEvents: true, orderBy: "startTime", maxResults: 250, fields: "items(id,summary,start,end,recurringEventId)" });
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) return [];
   return (await res.json()).items || [];
