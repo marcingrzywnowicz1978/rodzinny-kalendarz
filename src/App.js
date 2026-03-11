@@ -1,4 +1,4 @@
-allDay ? "#1a1a2e" : "#ddd"import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const CLIENT_ID = "346630044108-7alqhklonsgivjnvfmn5mho6mtc3csrv.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/calendar";
@@ -70,7 +70,7 @@ function loadGoogleScript() {
   });
 }
 async function fetchCalendarEvents(token, calendarId, timeMin, timeMax) {
-  const params = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), singleEvents: true, orderBy: "startTime", maxResults: 250, fields: "items(id,summary,start,end,recurringEventId)" });
+  const params = new URLSearchParams({ timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(), singleEvents: true, orderBy: "startTime", maxResults: 250, fields: "items(id,summary,start,end,recurringEventId,recurrence)" });
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) return [];
   return (await res.json()).items || [];
@@ -136,6 +136,22 @@ async function deleteCalendarEvent(token, calendarId, eventId, recurringEventId,
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
   return res.ok || res.status === 204;
 }
+function parseRRule(rruleStr) {
+  if (!rruleStr) return { freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) };
+  const rule = rruleStr.replace("RRULE:", "");
+  const parts = {};
+  rule.split(";").forEach(p => { const [k, v] = p.split("="); parts[k] = v; });
+  const freqMap = { DAILY: "daily", WEEKLY: "weekly", MONTHLY: "monthly", YEARLY: "yearly" };
+  const dayMapRev = { MO: "pn", TU: "wt", WE: "sr", TH: "cz", FR: "pt", SA: "sb", SU: "nd" };
+  const freq = freqMap[parts.FREQ] || "none";
+  const interval = parts.INTERVAL ? parseInt(parts.INTERVAL) : 1;
+  const days = parts.BYDAY ? parts.BYDAY.split(",").map(d => dayMapRev[d]).filter(Boolean) : [];
+  let endType = "never", endCount = 10, endDate = formatDate(new Date());
+  if (parts.COUNT) { endType = "count"; endCount = parseInt(parts.COUNT); }
+  if (parts.UNTIL) { endType = "date"; const u = parts.UNTIL.replace("T000000Z",""); endDate = `${u.slice(0,4)}-${u.slice(4,6)}-${u.slice(6,8)}`; }
+  return { freq, interval, days, endType, endCount, endDate };
+}
+
 function parseGoogleEvents(items, personEmail, personColor) {
   return items.map(item => {
     const isAllDay = !!item.start.date;
@@ -145,6 +161,7 @@ function parseGoogleEvents(items, personEmail, personColor) {
     return {
       id: item.id,
       recurringEventId: item.recurringEventId || null,
+      rrule: item.recurrence?.[0] || null,
       type: isMultiDay ? "trip" : "event",
       title: item.summary || "(bez tytułu)", personEmail, color: personColor,
       date, dateFrom: date,
@@ -162,7 +179,7 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
   const [date, setDate] = useState(formatDate(ev.date));
   const [start, setStart] = useState(ev.start || "09:00");
   const [end, setEnd] = useState(ev.end || "10:00");
-  const [recurrence, setRecurrence] = useState({ freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
+  const [recurrence, setRecurrence] = useState(() => ev.rrule ? parseRRule(ev.rrule) : { freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
   const [personEmail, setPersonEmail] = useState(ev.personEmail);
   const [allDay, setAllDay] = useState(ev.allDay);
   const [saving, setSaving] = useState(false);
