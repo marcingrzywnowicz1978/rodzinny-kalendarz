@@ -115,17 +115,22 @@ async function createCalendarEvent(token, calendarId, eventData) {
   if (!res.ok) { const err = await res.json(); console.error("Google API error:", err); }
   return res.ok;
 }
-async function updateCalendarEvent(token, calendarId, eventId, eventData) {
+async function updateCalendarEvent(token, calendarId, eventId, eventData, scope) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const dateStr = formatDate(eventData.date);
   const body = {
     summary: eventData.title,
-    start: eventData.allDay ? { date: formatDate(eventData.date) } : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.start}:00`).toISOString() },
-    end: eventData.allDay ? { date: formatDate(eventData.date) } : { dateTime: new Date(`${formatDate(eventData.date)}T${eventData.end}:00`).toISOString() },
+    start: eventData.allDay ? { date: dateStr } : { dateTime: `${dateStr}T${eventData.start}:00`, timeZone: tz },
+    end: eventData.allDay ? { date: dateStr } : { dateTime: `${dateStr}T${eventData.end}:00`, timeZone: tz },
   };
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  // scope "all" = edit master recurring event
+  const id = (scope === "all" && eventData.recurringEventId) ? eventData.recurringEventId : eventId;
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${id}`, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return res.ok;
 }
-async function deleteCalendarEvent(token, calendarId, eventId) {
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+async function deleteCalendarEvent(token, calendarId, eventId, recurringEventId, scope) {
+  const id = (scope === "all" && recurringEventId) ? recurringEventId : eventId;
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
   return res.ok || res.status === 204;
 }
 function parseGoogleEvents(items, personEmail, personColor) {
@@ -135,7 +140,9 @@ function parseGoogleEvents(items, personEmail, personColor) {
     const endDate = isAllDay ? new Date(item.end.date + "T00:00:00") : new Date(item.end?.dateTime || item.start.dateTime);
     const isMultiDay = !sameDay(date, endDate) && isAllDay;
     return {
-      id: item.id, type: isMultiDay ? "trip" : "event",
+      id: item.id,
+      recurringEventId: item.recurringEventId || null,
+      type: isMultiDay ? "trip" : "event",
       title: item.summary || "(bez tytułu)", personEmail, color: personColor,
       date, dateFrom: date,
       dateTo: isMultiDay ? new Date(endDate.getTime() - 86400000) : date,
@@ -153,54 +160,104 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
   const [start, setStart] = useState(ev.start || "09:00");
   const [end, setEnd] = useState(ev.end || "10:00");
   const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [step, setStep] = useState("edit"); // "edit" | "delete_scope" | "save_scope"
+  const isRecurring = !!ev.recurringEventId;
 
   const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#1a1a2e", backgroundColor: "#fafafa", boxSizing: "border-box", outline: "none" };
   const lbl = { fontSize: 11, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 5 };
   const person = FAMILY.find(f => f.id === ev.personEmail);
   const color = eventColor(ev);
 
-  async function handleSave() {
+  async function doSave(scope) {
     setSaving(true);
-    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end });
+    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end }, scope);
     setSaving(false);
   }
+
+  async function doDelete(scope) {
+    await onDelete(ev, scope);
+  }
+
+  const ScopeButtons = ({ onSingle, onAll, actionLabel }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+      <p style={{ fontSize: 14, color: "#444", margin: "0 0 4px", fontWeight: 600 }}>To jest wydarzenie cykliczne. Co chcesz {actionLabel}?</p>
+      <button onClick={onSingle} style={{ padding: "13px", borderRadius: 12, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, color: "#1a1a2e", textAlign: "left" }}>
+        📌 Tylko to jedno wydarzenie
+      </button>
+      <button onClick={onAll} style={{ padding: "13px", borderRadius: 12, border: "1.5px solid #ddd", backgroundColor: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, color: "#1a1a2e", textAlign: "left" }}>
+        🔁 Wszystkie wydarzenia w cyklu
+      </button>
+      <button onClick={() => setStep("edit")} style={{ padding: "13px", borderRadius: 12, border: "none", backgroundColor: "#f0f0f0", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14, color: "#666" }}>
+        Anuluj
+      </button>
+    </div>
+  );
 
   return (
     <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
       <div style={{ backgroundColor: "white", borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+
+        {/* HEADER */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
           <div style={{ width: 14, height: 14, borderRadius: 4, backgroundColor: color, flexShrink: 0 }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: "#888" }}>{person?.name}</span>
+          {isRecurring && <span style={{ fontSize: 11, backgroundColor: "#f0f0f0", borderRadius: 6, padding: "2px 8px", color: "#888", fontWeight: 600 }}>🔁 Cykliczne</span>}
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "none", backgroundColor: "#f0f0f0", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", color: "#666" }}>×</button>
         </div>
 
-        <div style={{ marginBottom: 14 }}>
-          <label style={lbl}>Tytuł</label>
-          <input style={inp} value={title} onChange={e => setTitle(e.target.value)} />
-        </div>
-        <div style={{ marginBottom: 14 }}>
-          <label style={lbl}>Data</label>
-          <input type="date" style={inp} value={date} onChange={e => setDate(e.target.value)} />
-        </div>
-        {!ev.allDay && (
-          <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Początek</label><input type="time" style={inp} value={start} onChange={e => setStart(e.target.value)} /></div>
-            <div style={{ flex: 1 }}><label style={lbl}>Koniec</label><input type="time" style={inp} value={end} onChange={e => setEnd(e.target.value)} /></div>
-          </div>
+        {step === "delete_scope" && (
+          <ScopeButtons
+            actionLabel="usunąć"
+            onSingle={() => doDelete("single")}
+            onAll={() => doDelete("all")}
+          />
         )}
 
-        <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-          {!confirmDelete ? (
-            <button onClick={() => setConfirmDelete(true)} style={{ padding: "12px 16px", borderRadius: 12, border: "none", backgroundColor: "#fff0f0", color: "#cc3333", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14 }}>🗑 Usuń</button>
-          ) : (
-            <button onClick={() => onDelete(ev)} style={{ padding: "12px 16px", borderRadius: 12, border: "none", backgroundColor: "#cc3333", color: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14 }}>Na pewno usuń</button>
-          )}
-          <button onClick={handleSave} disabled={saving} style={{ flex: 1, padding: "12px", borderRadius: 12, border: "none", backgroundColor: "#1a1a2e", color: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>
-            {saving ? "Zapisuję..." : "Zapisz zmiany"}
-          </button>
-        </div>
+        {step === "save_scope" && (
+          <ScopeButtons
+            actionLabel="zmodyfikować"
+            onSingle={() => doSave("single")}
+            onAll={() => doSave("all")}
+          />
+        )}
+
+        {step === "edit" && (
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <label style={lbl}>Tytuł</label>
+              <input style={inp} value={title} onChange={e => setTitle(e.target.value)} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={lbl}>Data</label>
+              <input type="date" style={inp} value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+            {!ev.allDay && (
+              <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={lbl}>Początek</label>
+                  <input type="time" style={inp} value={start} onChange={e => {
+                    const newStart = e.target.value;
+                    setStart(newStart);
+                    const newEndMin = timeToMinutes(newStart) + 60;
+                    if (newEndMin <= 23 * 60) setEnd(minutesToTime(newEndMin));
+                  }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={lbl}>Koniec</label>
+                  <input type="time" style={inp} value={end} min={minutesToTime(timeToMinutes(start) + 15)} onChange={e => setEnd(e.target.value)} />
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button onClick={() => setStep("delete_scope")} style={{ padding: "12px 16px", borderRadius: 12, border: "none", backgroundColor: "#fff0f0", color: "#cc3333", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14 }}>🗑 Usuń</button>
+              <button onClick={() => isRecurring ? setStep("save_scope") : doSave("single")} disabled={saving} style={{ flex: 1, padding: "12px", borderRadius: 12, border: "none", backgroundColor: "#1a1a2e", color: "white", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14, opacity: saving ? 0.7 : 1 }}>
+                {saving ? "Zapisuję..." : "Zapisz zmiany"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -640,20 +697,20 @@ export default function App() {
     setPage("calendar");
   }
 
-  async function handleSaveEdit(eventData) {
+  async function handleSaveEdit(eventData, scope) {
     if (!token) return;
     const person = FAMILY.find(f => f.id === eventData.personEmail);
     if (!person) return;
-    await updateCalendarEvent(token, person.id, eventData.id, eventData);
+    await updateCalendarEvent(token, person.id, eventData.id, eventData, scope);
     await loadEvents(token);
     setEditingEvent(null);
   }
 
-  async function handleDeleteEvent(ev) {
+  async function handleDeleteEvent(ev, scope) {
     if (!token) return;
     const person = FAMILY.find(f => f.id === ev.personEmail);
     if (!person) return;
-    await deleteCalendarEvent(token, person.id, ev.id);
+    await deleteCalendarEvent(token, person.id, ev.id, ev.recurringEventId, scope);
     await loadEvents(token);
     setEditingEvent(null);
   }
