@@ -164,6 +164,7 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
   const [end, setEnd] = useState(ev.end || "10:00");
   const [recurrence, setRecurrence] = useState({ freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
   const [personEmail, setPersonEmail] = useState(ev.personEmail);
+  const [allDay, setAllDay] = useState(ev.allDay);
   const [saving, setSaving] = useState(false);
   const [step, setStep] = useState("edit");
   const isRecurring = !!ev.recurringEventId;
@@ -175,7 +176,7 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
 
   async function doSave(scope) {
     setSaving(true);
-    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end, personEmail, color: selectedPerson?.color, originalPersonEmail: ev.personEmail, recurrence }, scope);
+    await onSave({ ...ev, title, date: parseDate(date), start: allDay ? null : start, end: allDay ? null : end, allDay, personEmail, color: selectedPerson?.color, originalPersonEmail: ev.personEmail, recurrence }, scope);
     setSaving(false);
   }
 
@@ -231,7 +232,13 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
               <label style={lbl}>Data</label>
               <input type="date" style={inp} value={date} onChange={e => setDate(e.target.value)} />
             </div>
-            {!ev.allDay && (
+            <div style={{ marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
+              <label style={{ ...lbl, marginBottom: 0 }}>Całodniowe</label>
+              <button onClick={() => setAllDay(!allDay)} style={{ width: 44, height: 26, borderRadius: 13, border: "none", backgroundColor: allDay ? "#1a1a2e" : "#ddd", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
+                <div style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: "white", position: "absolute", top: 3, left: allDay ? 21 : 3, transition: "left 0.2s" }} />
+              </button>
+            </div>
+            {!allDay && (
               <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
                 <div style={{ flex: 1 }}>
                   <label style={lbl}>Początek</label>
