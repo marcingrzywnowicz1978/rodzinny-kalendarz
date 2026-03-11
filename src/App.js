@@ -75,13 +75,17 @@ async function fetchCalendarEvents(token, calendarId, timeMin, timeMax) {
   if (!res.ok) return [];
   const items = (await res.json()).items || [];
 
-  // Pobierz rrule dla unikalnych master eventów
+  // Pobierz rrule dla unikalnych master eventów (osobne zapytania GET)
   const masterIds = [...new Set(items.filter(i => i.recurringEventId).map(i => i.recurringEventId))];
   const rruleMap = {};
   await Promise.all(masterIds.map(async (masterId) => {
     try {
-      const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${masterId}?fields=recurrence`, { headers: { Authorization: `Bearer ${token}` } });
-      if (r.ok) { const d = await r.json(); if (d.recurrence?.[0]) rruleMap[masterId] = d.recurrence[0]; }
+      const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(masterId)}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) {
+        const d = await r.json();
+        const rule = (d.recurrence || []).find(r => r.startsWith("RRULE:"));
+        if (rule) rruleMap[masterId] = rule;
+      }
     } catch {}
   }));
 
