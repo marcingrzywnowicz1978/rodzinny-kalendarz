@@ -123,7 +123,10 @@ async function updateCalendarEvent(token, calendarId, eventId, eventData, scope)
     start: eventData.allDay ? { date: dateStr } : { dateTime: `${dateStr}T${eventData.start}:00`, timeZone: tz },
     end: eventData.allDay ? { date: dateStr } : { dateTime: `${dateStr}T${eventData.end}:00`, timeZone: tz },
   };
-  // scope "all" = edit master recurring event
+  if (eventData.recurrence) {
+    const rule = buildRRule(eventData.recurrence);
+    if (rule) body.recurrence = [rule];
+  }
   const id = (scope === "all" && eventData.recurringEventId) ? eventData.recurringEventId : eventId;
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${id}`, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return res.ok;
@@ -159,8 +162,9 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
   const [date, setDate] = useState(formatDate(ev.date));
   const [start, setStart] = useState(ev.start || "09:00");
   const [end, setEnd] = useState(ev.end || "10:00");
+  const [recurrence, setRecurrence] = useState({ freq: "none", interval: 1, days: [], endType: "never", endCount: 10, endDate: formatDate(new Date()) });
   const [saving, setSaving] = useState(false);
-  const [step, setStep] = useState("edit"); // "edit" | "delete_scope" | "save_scope"
+  const [step, setStep] = useState("edit");
   const isRecurring = !!ev.recurringEventId;
 
   const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e0e0e0", fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#1a1a2e", backgroundColor: "#fafafa", boxSizing: "border-box", outline: "none" };
@@ -170,7 +174,7 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
 
   async function doSave(scope) {
     setSaving(true);
-    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end }, scope);
+    await onSave({ ...ev, title, date: parseDate(date), start: ev.allDay ? null : start, end: ev.allDay ? null : end, recurrence }, scope);
     setSaving(false);
   }
 
@@ -197,7 +201,6 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
     <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
       <div style={{ backgroundColor: "white", borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
 
-        {/* HEADER */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
           <div style={{ width: 14, height: 14, borderRadius: 4, backgroundColor: color, flexShrink: 0 }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: "#888" }}>{person?.name}</span>
@@ -206,21 +209,8 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
           <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "none", backgroundColor: "#f0f0f0", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", color: "#666" }}>×</button>
         </div>
 
-        {step === "delete_scope" && (
-          <ScopeButtons
-            actionLabel="usunąć"
-            onSingle={() => doDelete("single")}
-            onAll={() => doDelete("all")}
-          />
-        )}
-
-        {step === "save_scope" && (
-          <ScopeButtons
-            actionLabel="zmodyfikować"
-            onSingle={() => doSave("single")}
-            onAll={() => doSave("all")}
-          />
-        )}
+        {step === "delete_scope" && <ScopeButtons actionLabel="usunąć" onSingle={() => doDelete("single")} onAll={() => doDelete("all")} />}
+        {step === "save_scope" && <ScopeButtons actionLabel="zmodyfikować" onSingle={() => doSave("single")} onAll={() => doSave("all")} />}
 
         {step === "edit" && (
           <>
@@ -249,6 +239,8 @@ function EditModal({ ev, onSave, onDelete, onClose }) {
                 </div>
               </div>
             )}
+
+            <RecurrencePanel recurrence={recurrence} onChange={setRecurrence} inp={inp} lbl={lbl} />
 
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button onClick={() => setStep("delete_scope")} style={{ padding: "12px 16px", borderRadius: 12, border: "none", backgroundColor: "#fff0f0", color: "#cc3333", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontWeight: 600, fontSize: 14 }}>🗑 Usuń</button>
